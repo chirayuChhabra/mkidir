@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+set -euo pipefail 
+
+# --- Global State ---
+TARGET_DIR=""
+TMP_DIR=""
+ORIGINAL_DIR="$(pwd)"
+SUCCESS=0
+DRY_RUN=0
+HAS_GIT=0
+PACKAGES=()
+
+# --- 1. Dependency Checks ---
+require_cmd() {
+    command -v "$1" >/dev/null 2>&1 || {
+        echo "❌ Required command not found: $1"
+        exit 1
+    }
+}
+
+# --- 2. Cleanup & Safety ---
+cleanup() {
+    # Safety: Exists, is a directory, is not root, and is not where we started
+    if [[ $SUCCESS -eq 0 && -n "$TMP_DIR" && -d "$TMP_DIR" && "$TMP_DIR" != "/" && "$TMP_DIR" != "$ORIGINAL_DIR" ]]; then
+        echo -e "\n💥 Setup aborted! Purging isolated sandbox..."
+        rm -rf "$TMP_DIR"
+    fi
+}
+
+# Explicit trap handling to prevent duplicate runs
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+# --- 3. Parse Arguments ---
+parse_args() {
+    if [[ $# -lt 1 || "$1" == "--help" ]]; then
+        echo "Usage: mkidr <target_path> [packages...] [--dry-run]"
+        exit 0
+    fi
+
+    TARGET_DIR="$1"
+    shift
+
+    if [[ -e "$TARGET_DIR" ]]; then
+        echo "❌ Error: Target '$TARGET_DIR' already exists."
+        exit 1
+    fi
+
+    for arg in "$@"; do
+        if [[ "$arg" == "--dry-run" ]]; then
+            DRY_RUN=1
+        else
+            PACKAGES+=("$arg")
+            [[ "${arg%%@*}" == "git" ]] && HAS_GIT=1
+        fi
+    done
+}
+
+# --- 4. Build Sandbox ---
+create_sandbox() {
+    if [[ $DRY_RUN -eq 1 ]]; then
+        echo "🧪 [DRY RUN] Would create isolated sandbox for: $TARGET_DIR"
+        return
+    fi
+
+    # CLI Polish: Summary
+    echo "🚀 Creating environment → $TARGET_DIR"
+    echo "📦 Packages: ${PACKAGES[*]:-(none)}"
+    echo "🧪 Building in isolated sandbox..."
+    
+    TMP_DIR=$(mktemp -d)
+    cd "$TMP_DIR" || exit 1
+    
+    devbox init >/dev/null
+    
+    # Generate direnv even if no packages are passed
+    echo "🔧 Generating direnv..."
+    devbox generate direnv >/dev/null
+}
+
+# --- 5. Install Packages ---
+install_packages() {
+    if [[ ${#PACKAGES[@]} -eq 0 ]]; then
+        return
+    fi
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+        echo "📦 [DRY RUN] Would batch install: ${PACKAGES[*]}"
+        return
+    fi
+
+    echo "⬇️ Fetching packages..."
+    devbox add "${PACKAGES[@]}" >/dev/null
+}
+
+# --- 6. Configure Git ---
+setup_git() {
+    if [[ $HAS_GIT -eq 0 ]]; then
+        return
+    fi
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+        echo "🐙 [DRY RUN] Would initialize Git repository and .gitignore"
+        return
+    fi
+
+    echo "🐙 Initializing Git..."
+    devbox run -- git init >/dev/null
+    
+    cat > .gitignore <<EOF
+.devbox/
+.direnv/
+EOF
+}
+
+# --- 7. Commit to Filesystem ---
+commit_environment() {
+    if [[ $DRY_RUN -eq 1 ]]; then
+        echo "✅ [DRY RUN] Would atomically move sandbox to: $TARGET_DIR"
+        exit 0
+    fi
+
+    cd "$ORIGINAL_DIR" || exit 1
+    mkdir -p "$(dirname "$TARGET_DIR")"
+    
+    # Standard mv handles cross-filesystem transfers safely on its own
+    mv "$TMP_DIR" "$TARGET_DIR"
+    
+    # NEW: Auto-allow direnv on the final, absolute path
+    if command -v direnv >/dev/null 2>&1; then
+        direnv allow "$TARGET_DIR" >/dev/null 2>&1
+        echo "🔓 Auto-approved direnv environment"
+    fi
+    
+    SUCCESS=1
+    echo -e "\n✅ Done! Environment materialized at: $TARGET_DIR"
+}
+
+# --- Orchestrator ---
+main() {
+    require_cmd devbox
+    require_cmd mktemp
+    require_cmd mv
+    
+    parse_args "$@"
+    create_sandbox
+    install_packages
+    setup_git
+    commit_environment
+}
+
+main "$@"
