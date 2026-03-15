@@ -3,13 +3,14 @@
 Atomic devbox environment bootstrapper.
 
 `mkidir` creates a development environment in an isolated sandbox
-and commits it atomically to the filesystem.
+on the destination filesystem and commits it atomically to the target path.
 
 ## Features
 
 - Atomic environment creation
 - Automatic devbox initialization
 - Batch package installation
+- Built-in project templates
 - Automatic git initialization if `git` package is detected
 - Dry run mode
 - Safe rollback on failure
@@ -84,7 +85,8 @@ You should see the usage message.
 ## Usage
 
 ```bash
-mkidir <target_path> [packages...] [--dry-run]
+mkidir <target_path> [packages...] [--template NAME] [--dry-run]
+mkidir --list-templates
 ```
 
 ### Examples
@@ -95,9 +97,21 @@ mkidir backend nodejs@24 git
 cd backend
 ```
 
+**Create a Node.js starter from a template:**
+```bash
+mkidir backend --template node
+cd backend
+```
+
 **Create a Python project:**
 ```bash
 mkidir ml-project python@3.12 git
+cd ml-project
+```
+
+**Create a Python starter from a template:**
+```bash
+mkidir ml-project --template python
 cd ml-project
 ```
 
@@ -107,18 +121,30 @@ mkidir myapp nodejs@24 python@3.12 bun git
 cd myapp
 ```
 
+**Create a full-stack starter from a template:**
+```bash
+mkidir myapp --template fullstack
+cd myapp
+```
+
 **Test what would be created (dry run):**
 ```bash
-mkidir test-env nodejs@20 --dry-run
+mkidir test-env --template node --dry-run
+```
+
+**List available templates:**
+```bash
+mkidir --list-templates
 ```
 
 ## How It Works
 
-1. **Isolated Sandbox**: Creates environment in a temporary directory using `mktemp`
-2. **Package Installation**: Installs specified packages via devbox
-3. **Direnv Generation**: Creates `.envrc` file for automatic environment activation
-4. **Git Setup**: If `git` is in package list, runs `git init` and creates `.gitignore`
-5. **Atomic Commit**: Moves completed environment to target path (rolls back on failure)
+1. **Isolated Sandbox**: Creates the sandbox as a hidden sibling of the target so the final rename stays on the same filesystem
+2. **Direnv Generation**: Creates `.envrc` file for automatic environment activation
+3. **Package Installation**: Installs specified packages via devbox
+4. **Template Scaffolding**: Optionally writes starter files such as `README.md`, `package.json`, or `pyproject.toml`
+5. **Git Setup**: If `git` is in package list, runs `git init` and updates `.gitignore`
+6. **Atomic Commit**: Renames the completed sandbox into place (rolls back on failure)
 
 When you `cd` into the created directory, direnv automatically activates the devbox environment with all specified packages available.
 
@@ -131,7 +157,7 @@ When you `cd` into the created directory, direnv automatically activates the dev
 ### Benefits
 
 - **No Global Conflicts**: Node 24 in one project, Node 18 in another—no interference
-- **Atomic Creation**: If setup fails, your filesystem stays clean (no half-created directories)
+- **Atomic Creation**: The final rename happens on the destination filesystem, so you do not get a half-written target directory
 - **AI-Friendly**: Create the environment once, then AI can safely run npm/pip/etc commands
 - **Instant Activation**: With direnv, just `cd` into the project and everything works
 

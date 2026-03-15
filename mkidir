@@ -3,17 +3,42 @@ set -euo pipefail
 
 # --- Global State ---
 TARGET_DIR=""
+TARGET_PARENT=""
+TARGET_NAME=""
 TMP_DIR=""
 ORIGINAL_DIR="$(pwd)"
 SUCCESS=0
 DRY_RUN=0
 HAS_GIT=0
+PARENT_CREATED=0
+TEMPLATE=""
 PACKAGES=()
 
-# --- 1. Dependency Checks ---
+show_usage() {
+    cat <<'EOF'
+Usage: mkidir <target_path> [packages...] [--template NAME] [--dry-run]
+       mkidir --list-templates
+
+Options:
+  --template, -t     Apply a starter template before finalizing the environment
+  --dry-run          Print what would be created without touching the filesystem
+  --list-templates   Show available built-in templates
+  --help, -h         Show this help message
+EOF
+}
+
+list_templates() {
+    cat <<'EOF'
+Available templates:
+  node       Node.js app starter with package.json, README, and src/index.js
+  python     Python app starter with pyproject.toml, README, and src/main.py
+  fullstack  Polyglot starter with apps/web and apps/api skeletons
+EOF
+}
+
 require_cmd() {
     command -v "$1" >/dev/null 2>&1 || {
-        echo "❌ Required command not found: $1"
+        echo "❌ Required command not found: $1" >&2
         exit 1
     }
 }
@@ -35,70 +60,226 @@ run_step() {
     rm -f "$log_file"
 }
 
-# --- 2. Cleanup & Safety ---
-cleanup() {
-    # Safety: Exists, is a directory, is not root, and is not where we started
-    if [[ $SUCCESS -eq 0 && -n "$TMP_DIR" && -d "$TMP_DIR" && "$TMP_DIR" != "/" && "$TMP_DIR" != "$ORIGINAL_DIR" ]]; then
-        echo -e "\n💥 Setup aborted! Purging isolated sandbox..."
-        rm -rf "$TMP_DIR"
+package_base() {
+    printf '%s\n' "${1%%@*}"
+}
+
+package_exists() {
+    local wanted_base
+    local package
+
+    wanted_base="$(package_base "$1")"
+    for package in "${PACKAGES[@]}"; do
+        if [[ "$(package_base "$package")" == "$wanted_base" ]]; then
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+add_package() {
+    local package="$1"
+
+    if package_exists "$package"; then
+        return
+    fi
+
+    PACKAGES+=("$package")
+    if [[ "$(package_base "$package")" == "git" ]]; then
+        HAS_GIT=1
     fi
 }
 
-# Explicit trap handling to prevent duplicate runs
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+append_gitignore_entries() {
+    local entry
 
-# --- 3. Parse Arguments ---
-parse_args() {
-    if [[ $# -lt 1 || "$1" == "--help" ]]; then
-        echo "Usage: mkidir <target_path> [packages...] [--dry-run]"
-        exit 0
-    fi
-
-    TARGET_DIR="$1"
-    shift
-
-    if [[ -e "$TARGET_DIR" ]]; then
-        echo "❌ Error: Target '$TARGET_DIR' already exists."
-        exit 1
-    fi
-
-    for arg in "$@"; do
-        if [[ "$arg" == "--dry-run" ]]; then
-            DRY_RUN=1
-        else
-            PACKAGES+=("$arg")
-            if [[ "${arg%%@*}" == "git" ]]; then
-                HAS_GIT=1
-            fi
+    touch .gitignore
+    for entry in "$@"; do
+        if ! grep -Fqx "$entry" .gitignore 2>/dev/null; then
+            printf '%s\n' "$entry" >>.gitignore
         fi
     done
 }
 
-# --- 4. Build Sandbox ---
+slugify_name() {
+    local raw="$1"
+    local slug
+
+    slug="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]' '-')"
+    slug="${slug#-}"
+    slug="${slug%-}"
+
+    if [[ -z "$slug" ]]; then
+        slug="app"
+    fi
+
+    printf '%s\n' "$slug"
+}
+
+validate_template() {
+    case "$TEMPLATE" in
+        ""|node|python|fullstack)
+            ;;
+        *)
+            echo "❌ Unknown template: $TEMPLATE" >&2
+            echo "   Run 'mkidir --list-templates' to see the available options." >&2
+            exit 1
+            ;;
+    esac
+}
+
+merge_template_packages() {
+    case "$TEMPLATE" in
+        node)
+            add_package "nodejs@24"
+            add_package "git"
+            ;;
+        python)
+            add_package "python@3.12"
+            add_package "git"
+            ;;
+        fullstack)
+            add_package "nodejs@24"
+            add_package "python@3.12"
+            add_package "git"
+            ;;
+    esac
+}
+
+print_template_plan() {
+    case "$TEMPLATE" in
+        node)
+            echo "   - README.md"
+            echo "   - package.json"
+            echo "   - src/index.js"
+            ;;
+        python)
+            echo "   - README.md"
+            echo "   - pyproject.toml"
+            echo "   - src/main.py"
+            ;;
+        fullstack)
+            echo "   - README.md"
+            echo "   - apps/web/package.json"
+            echo "   - apps/web/src/index.js"
+            echo "   - apps/api/main.py"
+            ;;
+    esac
+}
+
+cleanup() {
+    if [[ $SUCCESS -eq 0 && -n "$TMP_DIR" && -d "$TMP_DIR" && "$TMP_DIR" != "/" && "$TMP_DIR" != "$ORIGINAL_DIR" ]]; then
+        echo -e "\n💥 Setup aborted! Purging isolated sandbox..."
+        rm -rf "$TMP_DIR"
+    fi
+
+    if [[ $SUCCESS -eq 0 && $PARENT_CREATED -eq 1 && -n "$TARGET_PARENT" && -d "$TARGET_PARENT" ]]; then
+        rmdir "$TARGET_PARENT" 2>/dev/null || true
+    fi
+}
+
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+parse_args() {
+    if [[ $# -eq 0 ]]; then
+        show_usage
+        exit 0
+    fi
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h)
+                show_usage
+                exit 0
+                ;;
+            --list-templates)
+                list_templates
+                exit 0
+                ;;
+            --dry-run)
+                DRY_RUN=1
+                shift
+                ;;
+            --template|-t)
+                if [[ $# -lt 2 ]]; then
+                    echo "❌ Missing template name for $1" >&2
+                    exit 1
+                fi
+                TEMPLATE="$2"
+                shift 2
+                ;;
+            --template=*)
+                TEMPLATE="${1#*=}"
+                shift
+                ;;
+            -*)
+                echo "❌ Unknown option: $1" >&2
+                exit 1
+                ;;
+            *)
+                if [[ -z "$TARGET_DIR" ]]; then
+                    TARGET_DIR="$1"
+                else
+                    add_package "$1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$TARGET_DIR" ]]; then
+        echo "❌ Missing target path." >&2
+        exit 1
+    fi
+
+    if [[ -e "$TARGET_DIR" ]]; then
+        echo "❌ Error: Target '$TARGET_DIR' already exists." >&2
+        exit 1
+    fi
+
+    validate_template
+    merge_template_packages
+    TARGET_PARENT="$(dirname -- "$TARGET_DIR")"
+    TARGET_NAME="$(basename -- "$TARGET_DIR")"
+}
+
+prepare_target_parent() {
+    if [[ ! -d "$TARGET_PARENT" ]]; then
+        mkdir -p "$TARGET_PARENT"
+        PARENT_CREATED=1
+    fi
+
+    TARGET_PARENT="$(cd "$TARGET_PARENT" && pwd)"
+    TARGET_DIR="$TARGET_PARENT/$TARGET_NAME"
+}
+
 create_sandbox() {
     if [[ $DRY_RUN -eq 1 ]]; then
-        echo "🧪 [DRY RUN] Would create isolated sandbox for: $TARGET_DIR"
+        echo "🧪 [DRY RUN] Would create isolated sandbox next to: $TARGET_DIR"
         return
     fi
 
-    # CLI Polish: Summary
+    prepare_target_parent
+
     echo "🚀 Creating environment → $TARGET_DIR"
     echo "📦 Packages: ${PACKAGES[*]:-(none)}"
-    echo "🧪 Building in isolated sandbox..."
-    
-    TMP_DIR=$(mktemp -d)
+    if [[ -n "$TEMPLATE" ]]; then
+        echo "🧩 Template: $TEMPLATE"
+    fi
+    echo "🧪 Building in isolated sandbox on destination filesystem..."
+
+    TMP_DIR="$(mktemp -d "$TARGET_PARENT/.mkidir.${TARGET_NAME}.XXXXXX")"
     cd "$TMP_DIR" || exit 1
 
     run_step "devbox init" devbox init
 
-    # Generate direnv even if no packages are passed
     echo "🔧 Generating direnv..."
     run_step "devbox generate direnv" devbox generate direnv
 }
 
-# --- 5. Install Packages ---
 install_packages() {
     if [[ ${#PACKAGES[@]} -eq 0 ]]; then
         return
@@ -113,40 +294,156 @@ install_packages() {
     run_step "devbox add" devbox add "${PACKAGES[@]}"
 }
 
-# --- 6. Configure Git ---
+apply_template() {
+    local project_title
+    local project_slug
+
+    if [[ -z "$TEMPLATE" ]]; then
+        return
+    fi
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+        echo "🧩 [DRY RUN] Would scaffold template '$TEMPLATE' with:"
+        print_template_plan
+        return
+    fi
+
+    project_title="$TARGET_NAME"
+    project_slug="$(slugify_name "$TARGET_NAME")"
+
+    echo "🧩 Applying template..."
+
+    case "$TEMPLATE" in
+        node)
+            mkdir -p src
+            cat >README.md <<EOF
+# ${project_title}
+
+Node.js starter bootstrapped with mkidir.
+EOF
+            cat >package.json <<EOF
+{
+  "name": "${project_slug}",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js"
+  }
+}
+EOF
+            cat >src/index.js <<'EOF'
+console.log("mkidir node template ready");
+EOF
+            append_gitignore_entries "node_modules/"
+            ;;
+        python)
+            mkdir -p src
+            cat >README.md <<EOF
+# ${project_title}
+
+Python starter bootstrapped with mkidir.
+EOF
+            cat >pyproject.toml <<EOF
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "${project_slug}"
+version = "0.1.0"
+description = "Python starter bootstrapped with mkidir"
+readme = "README.md"
+requires-python = ">=3.12"
+EOF
+            cat >src/main.py <<'EOF'
+def main():
+    print("mkidir python template ready")
+
+
+if __name__ == "__main__":
+    main()
+EOF
+            append_gitignore_entries "__pycache__/" "*.pyc"
+            ;;
+        fullstack)
+            mkdir -p apps/web/src apps/api
+            cat >README.md <<EOF
+# ${project_title}
+
+Full-stack starter bootstrapped with mkidir.
+
+## Apps
+
+- `apps/web`: Node.js frontend shell
+- `apps/api`: Python backend shell
+EOF
+            cat >apps/web/package.json <<EOF
+{
+  "name": "${project_slug}-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js"
+  }
+}
+EOF
+            cat >apps/web/src/index.js <<'EOF'
+console.log("mkidir fullstack web app ready");
+EOF
+            cat >apps/api/main.py <<'EOF'
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"status":"ok"}')
+
+
+if __name__ == "__main__":
+    server = HTTPServer(("127.0.0.1", 8000), Handler)
+    print("mkidir fullstack api ready on http://127.0.0.1:8000")
+    server.serve_forever()
+EOF
+            append_gitignore_entries "node_modules/" "__pycache__/" "*.pyc"
+            ;;
+    esac
+}
+
 setup_git() {
     if [[ $HAS_GIT -eq 0 ]]; then
         return
     fi
 
     if [[ $DRY_RUN -eq 1 ]]; then
-        echo "🐙 [DRY RUN] Would initialize Git repository and .gitignore"
+        echo "🐙 [DRY RUN] Would initialize Git repository and update .gitignore"
         return
     fi
 
     echo "🐙 Initializing Git..."
     run_step "devbox run -- git init" devbox run -- git init
-
-    cat >.gitignore <<EOF
-.devbox/
-.direnv/
-EOF
+    append_gitignore_entries ".devbox/" ".direnv/"
 }
 
-# --- 7. Commit to Filesystem ---
 commit_environment() {
     if [[ $DRY_RUN -eq 1 ]]; then
-        echo "✅ [DRY RUN] Would atomically move sandbox to: $TARGET_DIR"
+        echo "✅ [DRY RUN] Would atomically rename sandbox to: $TARGET_DIR"
         exit 0
     fi
 
     cd "$ORIGINAL_DIR" || exit 1
-    mkdir -p "$(dirname "$TARGET_DIR")"
 
-    # Standard mv handles cross-filesystem transfers safely on its own
+    if [[ -e "$TARGET_DIR" ]]; then
+        echo "❌ Error: Target '$TARGET_DIR' already exists." >&2
+        exit 1
+    fi
+
     mv "$TMP_DIR" "$TARGET_DIR"
 
-    # NEW: Auto-allow direnv on the final, absolute path
     if command -v direnv >/dev/null 2>&1; then
         if direnv allow "$TARGET_DIR" >/dev/null 2>&1; then
             echo "🔓 Auto-approved direnv environment"
@@ -159,15 +456,18 @@ commit_environment() {
     echo -e "\n✅ Done! Environment materialized at: $TARGET_DIR"
 }
 
-# --- Orchestrator ---
 main() {
-    require_cmd devbox
-    require_cmd mktemp
-    require_cmd mv
-
     parse_args "$@"
+
+    if [[ $DRY_RUN -eq 0 ]]; then
+        require_cmd devbox
+        require_cmd mktemp
+        require_cmd mv
+    fi
+
     create_sandbox
     install_packages
+    apply_template
     setup_git
     commit_environment
 }
