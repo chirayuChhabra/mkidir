@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -euo pipefail 
+set -euo pipefail
 
 # --- Global State ---
 TARGET_DIR=""
@@ -16,6 +16,23 @@ require_cmd() {
         echo "❌ Required command not found: $1"
         exit 1
     }
+}
+
+run_step() {
+    local label="$1"
+    shift
+
+    local log_file
+    log_file="$(mktemp)"
+
+    if ! "$@" >"$log_file" 2>&1; then
+        echo "❌ ${label} failed." >&2
+        sed 's/^/   /' "$log_file" >&2
+        rm -f "$log_file"
+        exit 1
+    fi
+
+    rm -f "$log_file"
 }
 
 # --- 2. Cleanup & Safety ---
@@ -35,7 +52,7 @@ trap 'exit 143' TERM
 # --- 3. Parse Arguments ---
 parse_args() {
     if [[ $# -lt 1 || "$1" == "--help" ]]; then
-        echo "Usage: mkidr <target_path> [packages...] [--dry-run]"
+        echo "Usage: mkidir <target_path> [packages...] [--dry-run]"
         exit 0
     fi
 
@@ -52,7 +69,9 @@ parse_args() {
             DRY_RUN=1
         else
             PACKAGES+=("$arg")
-            [[ "${arg%%@*}" == "git" ]] && HAS_GIT=1
+            if [[ "${arg%%@*}" == "git" ]]; then
+                HAS_GIT=1
+            fi
         fi
     done
 }
@@ -71,12 +90,12 @@ create_sandbox() {
     
     TMP_DIR=$(mktemp -d)
     cd "$TMP_DIR" || exit 1
-    
-    devbox init >/dev/null
-    
+
+    run_step "devbox init" devbox init
+
     # Generate direnv even if no packages are passed
     echo "🔧 Generating direnv..."
-    devbox generate direnv >/dev/null
+    run_step "devbox generate direnv" devbox generate direnv
 }
 
 # --- 5. Install Packages ---
@@ -91,7 +110,7 @@ install_packages() {
     fi
 
     echo "⬇️ Fetching packages..."
-    devbox add "${PACKAGES[@]}" >/dev/null
+    run_step "devbox add" devbox add "${PACKAGES[@]}"
 }
 
 # --- 6. Configure Git ---
@@ -106,9 +125,9 @@ setup_git() {
     fi
 
     echo "🐙 Initializing Git..."
-    devbox run -- git init >/dev/null
-    
-    cat > .gitignore <<EOF
+    run_step "devbox run -- git init" devbox run -- git init
+
+    cat >.gitignore <<EOF
 .devbox/
 .direnv/
 EOF
@@ -123,16 +142,19 @@ commit_environment() {
 
     cd "$ORIGINAL_DIR" || exit 1
     mkdir -p "$(dirname "$TARGET_DIR")"
-    
+
     # Standard mv handles cross-filesystem transfers safely on its own
     mv "$TMP_DIR" "$TARGET_DIR"
-    
+
     # NEW: Auto-allow direnv on the final, absolute path
     if command -v direnv >/dev/null 2>&1; then
-        direnv allow "$TARGET_DIR" >/dev/null 2>&1
-        echo "🔓 Auto-approved direnv environment"
+        if direnv allow "$TARGET_DIR" >/dev/null 2>&1; then
+            echo "🔓 Auto-approved direnv environment"
+        else
+            echo "⚠️ direnv auto-allow failed for: $TARGET_DIR" >&2
+        fi
     fi
-    
+
     SUCCESS=1
     echo -e "\n✅ Done! Environment materialized at: $TARGET_DIR"
 }
@@ -142,7 +164,7 @@ main() {
     require_cmd devbox
     require_cmd mktemp
     require_cmd mv
-    
+
     parse_args "$@"
     create_sandbox
     install_packages
