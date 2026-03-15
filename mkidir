@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# --- Global State ---
 TARGET_DIR=""
 TARGET_PARENT=""
 TARGET_NAME=""
@@ -12,15 +11,20 @@ DRY_RUN=0
 HAS_GIT=0
 PARENT_CREATED=0
 TEMPLATE=""
+TEMPLATE_LANGUAGE=""
+PROJECT_TITLE=""
+PROJECT_SLUG=""
 PACKAGES=()
 
 show_usage() {
     cat <<'EOF'
-Usage: mkidir <target_path> [packages...] [--template NAME] [--dry-run]
+Usage: mkidir <target_path> [packages...] [--template NAME] [--js|--ts] [--dry-run]
        mkidir --list-templates
 
 Options:
   --template, -t     Apply a starter template before finalizing the environment
+  --js               Use JavaScript when the template supports it
+  --ts               Use TypeScript when the template supports it
   --dry-run          Print what would be created without touching the filesystem
   --list-templates   Show available built-in templates
   --help, -h         Show this help message
@@ -33,12 +37,21 @@ Available templates:
   node       Node.js app starter with package.json, README, and src/index.js
   python     Python app starter with pyproject.toml, README, and src/main.py
   fullstack  Polyglot starter with apps/web and apps/api skeletons
+  express    Express API starter with TypeScript by default and --js support
 EOF
+}
+
+log_info() {
+    printf '%s\n' "$*"
+}
+
+log_error() {
+    printf 'Error: %s\n' "$*" >&2
 }
 
 require_cmd() {
     command -v "$1" >/dev/null 2>&1 || {
-        echo "❌ Required command not found: $1" >&2
+        log_error "required command not found: $1"
         exit 1
     }
 }
@@ -51,7 +64,7 @@ run_step() {
     log_file="$(mktemp)"
 
     if ! "$@" >"$log_file" 2>&1; then
-        echo "❌ ${label} failed." >&2
+        log_error "${label} failed."
         sed 's/^/   /' "$log_file" >&2
         rm -f "$log_file"
         exit 1
@@ -117,16 +130,786 @@ slugify_name() {
     printf '%s\n' "$slug"
 }
 
-validate_template() {
-    case "$TEMPLATE" in
-        ""|node|python|fullstack)
+write_asset_file() {
+    local asset_key="$1"
+    local destination="$2"
+    local content
+
+    content="$(render_asset "$asset_key")"
+    content="${content//__PROJECT_TITLE__/$PROJECT_TITLE}"
+    content="${content//__PROJECT_SLUG__/$PROJECT_SLUG}"
+    mkdir -p "$(dirname "$destination")"
+    printf '%s\n' "$content" >"$destination"
+}
+
+cleanup() {
+    if [[ $SUCCESS -eq 0 && -n "$TMP_DIR" && -d "$TMP_DIR" && "$TMP_DIR" != "/" && "$TMP_DIR" != "$ORIGINAL_DIR" ]]; then
+        printf '\n'
+        log_info "Setup aborted. Purging isolated sandbox..."
+        rm -rf "$TMP_DIR"
+    fi
+
+    if [[ $SUCCESS -eq 0 && $PARENT_CREATED -eq 1 && -n "$TARGET_PARENT" && -d "$TARGET_PARENT" ]]; then
+        rmdir "$TARGET_PARENT" 2>/dev/null || true
+    fi
+}
+
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+render_asset() {
+    case "$1" in
+        'express-js/.env.example.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+NODE_ENV=development
+PORT=3000
+LOG_LEVEL=info
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-js/README.md.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+# __PROJECT_TITLE__
+
+Production-ready Express API scaffold bootstrapped with mkidir.
+
+## Quick start
+
+```bash
+npm install
+cp .env.example .env
+npm run dev
+```
+
+## Scripts
+
+- `npm run dev`: start the API in watch mode with native Node watch mode
+- `npm run start`: run the API once
+
+## Structure
+
+```text
+src/
+  app.js
+  server.js
+  config/
+  middleware/
+  modules/
+  routes/
+```
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-js/package.json.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+{
+  "name": "__PROJECT_SLUG__",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Express API scaffold bootstrapped with mkidir",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "compression": "^1.7.4",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "helmet": "^8.0.0",
+    "http-errors": "^2.0.0",
+    "pino": "^9.5.0",
+    "pino-http": "^10.3.0",
+    "pino-pretty": "^13.0.0",
+    "zod": "^3.24.1"
+  }
+}
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-js/src/app.js.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import compression from "compression";
+import cors from "cors";
+import express from "express";
+import helmet from "helmet";
+
+import { httpLogger } from "./config/logger.js";
+import { errorHandler } from "./middleware/error-handler.js";
+import { notFoundHandler } from "./middleware/not-found.js";
+import { apiRouter } from "./routes/index.js";
+
+export function createApp() {
+  const app = express();
+
+  app.disable("x-powered-by");
+  app.use(helmet());
+  app.use(cors());
+  app.use(compression());
+  app.use(express.json());
+  app.use(httpLogger);
+
+  app.get("/", (_req, res) => {
+    res.status(200).json({
+      service: "__PROJECT_SLUG__",
+      status: "ok"
+    });
+  });
+
+  app.use("/api", apiRouter);
+  app.use(notFoundHandler);
+  app.use(errorHandler);
+
+  return app;
+}
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-js/src/config/env.js.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import "dotenv/config";
+
+import { z } from "zod";
+
+const envSchema = z.object({
+  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  LOG_LEVEL: z
+    .enum(["fatal", "error", "warn", "info", "debug", "trace"])
+    .default("info")
+});
+
+export const env = envSchema.parse(process.env);
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-js/src/config/logger.js.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import pino from "pino";
+import pinoHttp from "pino-http";
+
+import { env } from "./env.js";
+
+const transport =
+  env.NODE_ENV === "development"
+    ? {
+        target: "pino-pretty",
+        options: {
+          colorize: true,
+          translateTime: "SYS:standard"
+        }
+      }
+    : undefined;
+
+export const logger = pino({
+  level: env.LOG_LEVEL,
+  transport
+});
+
+export const httpLogger = pinoHttp({
+  logger
+});
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-js/src/middleware/error-handler.js.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import { logger } from "../config/logger.js";
+
+export function errorHandler(error, _req, res, _next) {
+  const statusCode = typeof error.status === "number" ? Number(error.status) : 500;
+  const message = statusCode >= 500 ? "Internal server error" : error.message || "Request failed";
+
+  if (statusCode >= 500) {
+    logger.error({ err: error }, "Unhandled request error");
+  }
+
+  res.status(statusCode).json({
+    error: {
+      message
+    }
+  });
+}
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-js/src/middleware/not-found.js.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import createHttpError from "http-errors";
+
+export function notFoundHandler(_req, _res, next) {
+  next(createHttpError(404, "Route not found"));
+}
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-js/src/modules/health/health.controller.js.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import { getHealthSnapshot } from "./health.service.js";
+
+export function getHealth(_req, res) {
+  res.status(200).json({
+    data: getHealthSnapshot()
+  });
+}
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-js/src/modules/health/health.route.js.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import { Router } from "express";
+
+import { getHealth } from "./health.controller.js";
+
+export const healthRouter = Router();
+
+healthRouter.get("/", getHealth);
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-js/src/modules/health/health.service.js.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import { env } from "../../config/env.js";
+
+export function getHealthSnapshot() {
+  return {
+    status: "ok",
+    environment: env.NODE_ENV,
+    uptimeSeconds: Math.round(process.uptime()),
+    timestamp: new Date().toISOString()
+  };
+}
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-js/src/routes/index.js.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import { Router } from "express";
+
+import { healthRouter } from "../modules/health/health.route.js";
+
+export const apiRouter = Router();
+
+apiRouter.use("/health", healthRouter);
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-js/src/server.js.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import http from "node:http";
+
+import { createApp } from "./app.js";
+import { env } from "./config/env.js";
+import { logger } from "./config/logger.js";
+
+const app = createApp();
+const server = http.createServer(app);
+
+server.listen(env.PORT, () => {
+  logger.info({ port: env.PORT, env: env.NODE_ENV }, "Server listening");
+});
+
+function shutdown(signal) {
+  logger.info({ signal }, "Shutting down HTTP server");
+  server.close((error) => {
+    if (error) {
+      logger.error({ err: error }, "Server shutdown failed");
+      process.exit(1);
+    }
+
+    process.exit(0);
+  });
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/.env.example.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+NODE_ENV=development
+PORT=3000
+LOG_LEVEL=info
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/README.md.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+# __PROJECT_TITLE__
+
+Production-ready Express API scaffold bootstrapped with mkidir.
+
+## Quick start
+
+```bash
+npm install
+cp .env.example .env
+npm run dev
+```
+
+## Scripts
+
+- `npm run dev`: start the API in watch mode with `tsx`
+- `npm run build`: compile TypeScript into `dist/`
+- `npm run start`: run the compiled server
+- `npm run typecheck`: validate the TypeScript project
+
+## Structure
+
+```text
+src/
+  app.ts
+  server.ts
+  config/
+  middleware/
+  modules/
+  routes/
+```
+
+## First modules
+
+- `src/modules/health`: example controller, route, and service
+- `src/config`: environment and logger setup
+- `src/middleware`: shared HTTP middleware
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/package.json.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+{
+  "name": "__PROJECT_SLUG__",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Express API scaffold bootstrapped with mkidir",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch --clear-screen=false src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "compression": "^1.7.4",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "helmet": "^8.0.0",
+    "http-errors": "^2.0.0",
+    "pino": "^9.5.0",
+    "pino-http": "^10.3.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/compression": "^1.7.5",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.2",
+    "pino-pretty": "^13.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/src/app.ts.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import compression from "compression";
+import cors from "cors";
+import express from "express";
+import helmet from "helmet";
+
+import { httpLogger } from "./config/logger.js";
+import { errorHandler } from "./middleware/error-handler.js";
+import { notFoundHandler } from "./middleware/not-found.js";
+import { apiRouter } from "./routes/index.js";
+
+export function createApp() {
+  const app = express();
+
+  app.disable("x-powered-by");
+  app.use(helmet());
+  app.use(cors());
+  app.use(compression());
+  app.use(express.json());
+  app.use(httpLogger);
+
+  app.get("/", (_req, res) => {
+    res.status(200).json({
+      service: "__PROJECT_SLUG__",
+      status: "ok"
+    });
+  });
+
+  app.use("/api", apiRouter);
+  app.use(notFoundHandler);
+  app.use(errorHandler);
+
+  return app;
+}
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/src/config/env.ts.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import "dotenv/config";
+
+import { z } from "zod";
+
+const envSchema = z.object({
+  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+  LOG_LEVEL: z
+    .enum(["fatal", "error", "warn", "info", "debug", "trace"])
+    .default("info")
+});
+
+export const env = envSchema.parse(process.env);
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/src/config/logger.ts.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import pino from "pino";
+import pinoHttp from "pino-http";
+
+import { env } from "./env.js";
+
+const transport =
+  env.NODE_ENV === "development"
+    ? {
+        target: "pino-pretty",
+        options: {
+          colorize: true,
+          translateTime: "SYS:standard"
+        }
+      }
+    : undefined;
+
+export const logger = pino({
+  level: env.LOG_LEVEL,
+  transport
+});
+
+export const httpLogger = pinoHttp({
+  logger
+});
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/src/middleware/error-handler.ts.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import type { ErrorRequestHandler } from "express";
+
+import { logger } from "../config/logger.js";
+
+export const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
+  const statusCode =
+    typeof (error as { status?: unknown }).status === "number"
+      ? Number((error as { status: number }).status)
+      : 500;
+
+  const message =
+    statusCode >= 500 ? "Internal server error" : error.message || "Request failed";
+
+  if (statusCode >= 500) {
+    logger.error({ err: error }, "Unhandled request error");
+  }
+
+  res.status(statusCode).json({
+    error: {
+      message
+    }
+  });
+};
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/src/middleware/not-found.ts.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import type { RequestHandler } from "express";
+import createHttpError from "http-errors";
+
+export const notFoundHandler: RequestHandler = (_req, _res, next) => {
+  next(createHttpError(404, "Route not found"));
+};
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/src/modules/health/health.controller.ts.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import type { Request, Response } from "express";
+
+import { getHealthSnapshot } from "./health.service.js";
+
+export function getHealth(_req: Request, res: Response) {
+  res.status(200).json({
+    data: getHealthSnapshot()
+  });
+}
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/src/modules/health/health.route.ts.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import { Router } from "express";
+
+import { getHealth } from "./health.controller.js";
+
+export const healthRouter = Router();
+
+healthRouter.get("/", getHealth);
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/src/modules/health/health.service.ts.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import { env } from "../../config/env.js";
+
+export function getHealthSnapshot() {
+  return {
+    status: "ok",
+    environment: env.NODE_ENV,
+    uptimeSeconds: Math.round(process.uptime()),
+    timestamp: new Date().toISOString()
+  };
+}
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/src/routes/index.ts.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import { Router } from "express";
+
+import { healthRouter } from "../modules/health/health.route.js";
+
+export const apiRouter = Router();
+
+apiRouter.use("/health", healthRouter);
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/src/server.ts.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import http from "node:http";
+
+import { createApp } from "./app.js";
+import { env } from "./config/env.js";
+import { logger } from "./config/logger.js";
+
+const app = createApp();
+const server = http.createServer(app);
+
+server.listen(env.PORT, () => {
+  logger.info({ port: env.PORT, env: env.NODE_ENV }, "Server listening");
+});
+
+function shutdown(signal: string) {
+  logger.info({ signal }, "Shutting down HTTP server");
+  server.close((error) => {
+    if (error) {
+      logger.error({ err: error }, "Server shutdown failed");
+      process.exit(1);
+    }
+
+    process.exit(0);
+  });
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/tsconfig.json.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "rootDir": "src",
+    "outDir": "dist",
+    "strict": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true
+  },
+  "include": ["src/**/*.ts"]
+}
+
+MKIDIR_ASSET_EOF
+            ;;
+        'fullstack/README.md.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+# __PROJECT_TITLE__
+
+Full-stack starter bootstrapped with mkidir.
+
+## Apps
+
+- `apps/web`: Node.js frontend shell
+- `apps/api`: Python backend shell
+
+MKIDIR_ASSET_EOF
+            ;;
+        'fullstack/apps/api/main.py.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"status":"ok"}')
+
+
+if __name__ == "__main__":
+    server = HTTPServer(("127.0.0.1", 8000), Handler)
+    print("mkidir fullstack api ready on http://127.0.0.1:8000")
+    server.serve_forever()
+
+MKIDIR_ASSET_EOF
+            ;;
+        'fullstack/apps/web/package.json.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+{
+  "name": "__PROJECT_SLUG__-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js"
+  }
+}
+
+MKIDIR_ASSET_EOF
+            ;;
+        'fullstack/apps/web/src/index.js.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+console.log("mkidir fullstack web app ready");
+
+MKIDIR_ASSET_EOF
+            ;;
+        'node/README.md.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+# __PROJECT_TITLE__
+
+Node.js starter bootstrapped with mkidir.
+
+MKIDIR_ASSET_EOF
+            ;;
+        'node/package.json.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+{
+  "name": "__PROJECT_SLUG__",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js"
+  }
+}
+
+MKIDIR_ASSET_EOF
+            ;;
+        'node/src/index.js.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+console.log("mkidir node template ready");
+
+MKIDIR_ASSET_EOF
+            ;;
+        'python/README.md.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+# __PROJECT_TITLE__
+
+Python starter bootstrapped with mkidir.
+
+MKIDIR_ASSET_EOF
+            ;;
+        'python/pyproject.toml.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "__PROJECT_SLUG__"
+version = "0.1.0"
+description = "Python starter bootstrapped with mkidir"
+readme = "README.md"
+requires-python = ">=3.12"
+
+MKIDIR_ASSET_EOF
+            ;;
+        'python/src/main.py.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+def main():
+    print("mkidir python template ready")
+
+
+if __name__ == "__main__":
+    main()
+
+MKIDIR_ASSET_EOF
             ;;
         *)
-            echo "❌ Unknown template: $TEMPLATE" >&2
-            echo "   Run 'mkidir --list-templates' to see the available options." >&2
+            log_error "unknown asset: $1"
             exit 1
             ;;
     esac
+}
+
+template_variant_name() {
+    case "$TEMPLATE" in
+        express)
+            if [[ "$TEMPLATE_LANGUAGE" == "js" ]]; then
+                printf 'express (javascript)\n'
+            else
+                printf 'express (typescript)\n'
+            fi
+            ;;
+        *)
+            printf '%s\n' "$TEMPLATE"
+            ;;
+    esac
+}
+
+validate_template() {
+    case "$TEMPLATE" in
+        ""|node|python|fullstack|express)
+            ;;
+        *)
+            log_error "unknown template: $TEMPLATE"
+            log_info "Run 'mkidir --list-templates' to see the available options."
+            exit 1
+            ;;
+    esac
+
+    if [[ "$TEMPLATE" == "express" ]]; then
+        if [[ -z "$TEMPLATE_LANGUAGE" ]]; then
+            TEMPLATE_LANGUAGE="ts"
+        fi
+        return
+    fi
+
+    if [[ -n "$TEMPLATE_LANGUAGE" ]]; then
+        log_error "--js/--ts is only supported with the express template"
+        exit 1
+    fi
 }
 
 merge_template_packages() {
@@ -142,6 +925,10 @@ merge_template_packages() {
         fullstack)
             add_package "nodejs@24"
             add_package "python@3.12"
+            add_package "git"
+            ;;
+        express)
+            add_package "nodejs@24"
             add_package "git"
             ;;
     esac
@@ -165,23 +952,108 @@ print_template_plan() {
             echo "   - apps/web/src/index.js"
             echo "   - apps/api/main.py"
             ;;
+        express)
+            if [[ "$TEMPLATE_LANGUAGE" == "js" ]]; then
+                echo "   - README.md"
+                echo "   - package.json"
+                echo "   - .env.example"
+                echo "   - src/app.js"
+                echo "   - src/server.js"
+                echo "   - src/config/"
+                echo "   - src/modules/health/"
+                echo "   - src/routes/index.js"
+            else
+                echo "   - README.md"
+                echo "   - package.json"
+                echo "   - tsconfig.json"
+                echo "   - .env.example"
+                echo "   - src/app.ts"
+                echo "   - src/server.ts"
+                echo "   - src/config/"
+                echo "   - src/modules/health/"
+                echo "   - src/routes/index.ts"
+            fi
+            ;;
     esac
 }
 
-cleanup() {
-    if [[ $SUCCESS -eq 0 && -n "$TMP_DIR" && -d "$TMP_DIR" && "$TMP_DIR" != "/" && "$TMP_DIR" != "$ORIGINAL_DIR" ]]; then
-        echo -e "\n💥 Setup aborted! Purging isolated sandbox..."
-        rm -rf "$TMP_DIR"
-    fi
+apply_node_template() {
+    write_asset_file "node/README.md.tpl" "README.md"
+    write_asset_file "node/package.json.tpl" "package.json"
+    write_asset_file "node/src/index.js.tpl" "src/index.js"
+    append_gitignore_entries "node_modules/"
+}
 
-    if [[ $SUCCESS -eq 0 && $PARENT_CREATED -eq 1 && -n "$TARGET_PARENT" && -d "$TARGET_PARENT" ]]; then
-        rmdir "$TARGET_PARENT" 2>/dev/null || true
+apply_python_template() {
+    write_asset_file "python/README.md.tpl" "README.md"
+    write_asset_file "python/pyproject.toml.tpl" "pyproject.toml"
+    write_asset_file "python/src/main.py.tpl" "src/main.py"
+    append_gitignore_entries "__pycache__/" "*.pyc"
+}
+
+apply_fullstack_template() {
+    write_asset_file "fullstack/README.md.tpl" "README.md"
+    write_asset_file "fullstack/apps/web/package.json.tpl" "apps/web/package.json"
+    write_asset_file "fullstack/apps/web/src/index.js.tpl" "apps/web/src/index.js"
+    write_asset_file "fullstack/apps/api/main.py.tpl" "apps/api/main.py"
+    append_gitignore_entries "node_modules/" "__pycache__/" "*.pyc"
+}
+
+apply_express_template() {
+    local prefix
+
+    prefix="express-$TEMPLATE_LANGUAGE"
+    write_asset_file "$prefix/README.md.tpl" "README.md"
+    write_asset_file "$prefix/package.json.tpl" "package.json"
+    write_asset_file "$prefix/.env.example.tpl" ".env.example"
+    write_asset_file "$prefix/src/app.$TEMPLATE_LANGUAGE.tpl" "src/app.$TEMPLATE_LANGUAGE"
+    write_asset_file "$prefix/src/server.$TEMPLATE_LANGUAGE.tpl" "src/server.$TEMPLATE_LANGUAGE"
+    write_asset_file "$prefix/src/config/env.$TEMPLATE_LANGUAGE.tpl" "src/config/env.$TEMPLATE_LANGUAGE"
+    write_asset_file "$prefix/src/config/logger.$TEMPLATE_LANGUAGE.tpl" "src/config/logger.$TEMPLATE_LANGUAGE"
+    write_asset_file "$prefix/src/middleware/error-handler.$TEMPLATE_LANGUAGE.tpl" "src/middleware/error-handler.$TEMPLATE_LANGUAGE"
+    write_asset_file "$prefix/src/middleware/not-found.$TEMPLATE_LANGUAGE.tpl" "src/middleware/not-found.$TEMPLATE_LANGUAGE"
+    write_asset_file "$prefix/src/routes/index.$TEMPLATE_LANGUAGE.tpl" "src/routes/index.$TEMPLATE_LANGUAGE"
+    write_asset_file "$prefix/src/modules/health/health.controller.$TEMPLATE_LANGUAGE.tpl" "src/modules/health/health.controller.$TEMPLATE_LANGUAGE"
+    write_asset_file "$prefix/src/modules/health/health.route.$TEMPLATE_LANGUAGE.tpl" "src/modules/health/health.route.$TEMPLATE_LANGUAGE"
+    write_asset_file "$prefix/src/modules/health/health.service.$TEMPLATE_LANGUAGE.tpl" "src/modules/health/health.service.$TEMPLATE_LANGUAGE"
+    append_gitignore_entries "node_modules/" "dist/" ".env"
+
+    if [[ "$TEMPLATE_LANGUAGE" == "ts" ]]; then
+        write_asset_file "$prefix/tsconfig.json.tpl" "tsconfig.json"
     fi
 }
 
-trap cleanup EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+apply_template() {
+    if [[ -z "$TEMPLATE" ]]; then
+        return
+    fi
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+        log_info "Dry run: would scaffold template '$(template_variant_name)' with:"
+        print_template_plan
+        return
+    fi
+
+    PROJECT_TITLE="$TARGET_NAME"
+    PROJECT_SLUG="$(slugify_name "$TARGET_NAME")"
+
+    log_info "Applying template..."
+
+    case "$TEMPLATE" in
+        node)
+            apply_node_template
+            ;;
+        python)
+            apply_python_template
+            ;;
+        fullstack)
+            apply_fullstack_template
+            ;;
+        express)
+            apply_express_template
+            ;;
+    esac
+}
 
 parse_args() {
     if [[ $# -eq 0 ]]; then
@@ -205,7 +1077,7 @@ parse_args() {
                 ;;
             --template|-t)
                 if [[ $# -lt 2 ]]; then
-                    echo "❌ Missing template name for $1" >&2
+                    log_error "missing template name for $1"
                     exit 1
                 fi
                 TEMPLATE="$2"
@@ -215,8 +1087,16 @@ parse_args() {
                 TEMPLATE="${1#*=}"
                 shift
                 ;;
+            --js)
+                TEMPLATE_LANGUAGE="js"
+                shift
+                ;;
+            --ts)
+                TEMPLATE_LANGUAGE="ts"
+                shift
+                ;;
             -*)
-                echo "❌ Unknown option: $1" >&2
+                log_error "unknown option: $1"
                 exit 1
                 ;;
             *)
@@ -231,12 +1111,12 @@ parse_args() {
     done
 
     if [[ -z "$TARGET_DIR" ]]; then
-        echo "❌ Missing target path." >&2
+        log_error "missing target path"
         exit 1
     fi
 
     if [[ -e "$TARGET_DIR" ]]; then
-        echo "❌ Error: Target '$TARGET_DIR' already exists." >&2
+        log_error "target '$TARGET_DIR' already exists"
         exit 1
     fi
 
@@ -258,25 +1138,25 @@ prepare_target_parent() {
 
 create_sandbox() {
     if [[ $DRY_RUN -eq 1 ]]; then
-        echo "🧪 [DRY RUN] Would create isolated sandbox next to: $TARGET_DIR"
+        log_info "Dry run: would create isolated sandbox next to $TARGET_DIR"
         return
     fi
 
     prepare_target_parent
 
-    echo "🚀 Creating environment → $TARGET_DIR"
-    echo "📦 Packages: ${PACKAGES[*]:-(none)}"
+    log_info "Creating environment: $TARGET_DIR"
+    log_info "Packages: ${PACKAGES[*]:-(none)}"
     if [[ -n "$TEMPLATE" ]]; then
-        echo "🧩 Template: $TEMPLATE"
+        log_info "Template: $(template_variant_name)"
     fi
-    echo "🧪 Building in isolated sandbox on destination filesystem..."
+    log_info "Building in isolated sandbox on destination filesystem..."
 
     TMP_DIR="$(mktemp -d "$TARGET_PARENT/.mkidir.${TARGET_NAME}.XXXXXX")"
     cd "$TMP_DIR" || exit 1
 
     run_step "devbox init" devbox init
 
-    echo "🔧 Generating direnv..."
+    log_info "Generating direnv..."
     run_step "devbox generate direnv" devbox generate direnv
 }
 
@@ -286,132 +1166,12 @@ install_packages() {
     fi
 
     if [[ $DRY_RUN -eq 1 ]]; then
-        echo "📦 [DRY RUN] Would batch install: ${PACKAGES[*]}"
+        log_info "Dry run: would batch install: ${PACKAGES[*]}"
         return
     fi
 
-    echo "⬇️ Fetching packages..."
+    log_info "Installing packages..."
     run_step "devbox add" devbox add "${PACKAGES[@]}"
-}
-
-apply_template() {
-    local project_title
-    local project_slug
-
-    if [[ -z "$TEMPLATE" ]]; then
-        return
-    fi
-
-    if [[ $DRY_RUN -eq 1 ]]; then
-        echo "🧩 [DRY RUN] Would scaffold template '$TEMPLATE' with:"
-        print_template_plan
-        return
-    fi
-
-    project_title="$TARGET_NAME"
-    project_slug="$(slugify_name "$TARGET_NAME")"
-
-    echo "🧩 Applying template..."
-
-    case "$TEMPLATE" in
-        node)
-            mkdir -p src
-            cat >README.md <<EOF
-# ${project_title}
-
-Node.js starter bootstrapped with mkidir.
-EOF
-            cat >package.json <<EOF
-{
-  "name": "${project_slug}",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "start": "node src/index.js"
-  }
-}
-EOF
-            cat >src/index.js <<'EOF'
-console.log("mkidir node template ready");
-EOF
-            append_gitignore_entries "node_modules/"
-            ;;
-        python)
-            mkdir -p src
-            cat >README.md <<EOF
-# ${project_title}
-
-Python starter bootstrapped with mkidir.
-EOF
-            cat >pyproject.toml <<EOF
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
-[project]
-name = "${project_slug}"
-version = "0.1.0"
-description = "Python starter bootstrapped with mkidir"
-readme = "README.md"
-requires-python = ">=3.12"
-EOF
-            cat >src/main.py <<'EOF'
-def main():
-    print("mkidir python template ready")
-
-
-if __name__ == "__main__":
-    main()
-EOF
-            append_gitignore_entries "__pycache__/" "*.pyc"
-            ;;
-        fullstack)
-            mkdir -p apps/web/src apps/api
-            cat >README.md <<EOF
-# ${project_title}
-
-Full-stack starter bootstrapped with mkidir.
-
-## Apps
-
-- `apps/web`: Node.js frontend shell
-- `apps/api`: Python backend shell
-EOF
-            cat >apps/web/package.json <<EOF
-{
-  "name": "${project_slug}-web",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "start": "node src/index.js"
-  }
-}
-EOF
-            cat >apps/web/src/index.js <<'EOF'
-console.log("mkidir fullstack web app ready");
-EOF
-            cat >apps/api/main.py <<'EOF'
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
-
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.end_headers()
-        self.wfile.write(b'{"status":"ok"}')
-
-
-if __name__ == "__main__":
-    server = HTTPServer(("127.0.0.1", 8000), Handler)
-    print("mkidir fullstack api ready on http://127.0.0.1:8000")
-    server.serve_forever()
-EOF
-            append_gitignore_entries "node_modules/" "__pycache__/" "*.pyc"
-            ;;
-    esac
 }
 
 setup_git() {
@@ -420,25 +1180,25 @@ setup_git() {
     fi
 
     if [[ $DRY_RUN -eq 1 ]]; then
-        echo "🐙 [DRY RUN] Would initialize Git repository and update .gitignore"
+        log_info "Dry run: would initialize git and update .gitignore"
         return
     fi
 
-    echo "🐙 Initializing Git..."
+    log_info "Initializing git..."
     run_step "devbox run -- git init" devbox run -- git init
     append_gitignore_entries ".devbox/" ".direnv/"
 }
 
 commit_environment() {
     if [[ $DRY_RUN -eq 1 ]]; then
-        echo "✅ [DRY RUN] Would atomically rename sandbox to: $TARGET_DIR"
+        log_info "Dry run: would atomically rename sandbox to $TARGET_DIR"
         exit 0
     fi
 
     cd "$ORIGINAL_DIR" || exit 1
 
     if [[ -e "$TARGET_DIR" ]]; then
-        echo "❌ Error: Target '$TARGET_DIR' already exists." >&2
+        log_error "target '$TARGET_DIR' already exists"
         exit 1
     fi
 
@@ -446,14 +1206,15 @@ commit_environment() {
 
     if command -v direnv >/dev/null 2>&1; then
         if direnv allow "$TARGET_DIR" >/dev/null 2>&1; then
-            echo "🔓 Auto-approved direnv environment"
+            log_info "Auto-approved direnv environment."
         else
-            echo "⚠️ direnv auto-allow failed for: $TARGET_DIR" >&2
+            log_error "direnv auto-allow failed for $TARGET_DIR"
         fi
     fi
 
     SUCCESS=1
-    echo -e "\n✅ Done! Environment materialized at: $TARGET_DIR"
+    printf '\n'
+    log_info "Done. Environment materialized at: $TARGET_DIR"
 }
 
 main() {
@@ -473,3 +1234,4 @@ main() {
 }
 
 main "$@"
+

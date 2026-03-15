@@ -11,9 +11,11 @@ on the destination filesystem and commits it atomically to the target path.
 - Automatic devbox initialization
 - Batch package installation
 - Built-in project templates
+- Express API template with TypeScript default and JavaScript flag
 - Automatic git initialization if `git` package is detected
 - Dry run mode
 - Safe rollback on failure
+- Modular source with single-file CLI output
 
 ## Installation
 
@@ -59,6 +61,9 @@ cd mkidir
 # Create local bin directory
 mkdir -p ~/.local/bin
 
+# Build the standalone CLI
+bash scripts/build.sh
+
 # Copy mkidir to PATH
 cp mkidir ~/.local/bin/mkidir
 
@@ -85,7 +90,7 @@ You should see the usage message.
 ## Usage
 
 ```bash
-mkidir <target_path> [packages...] [--template NAME] [--dry-run]
+mkidir <target_path> [packages...] [--template NAME] [--js|--ts] [--dry-run]
 mkidir --list-templates
 ```
 
@@ -127,6 +132,18 @@ mkidir myapp --template fullstack
 cd myapp
 ```
 
+**Create an Express API with TypeScript:**
+```bash
+mkidir api --template express
+cd api
+```
+
+**Create an Express API with JavaScript instead:**
+```bash
+mkidir api --template express --js
+cd api
+```
+
 **Test what would be created (dry run):**
 ```bash
 mkidir test-env --template node --dry-run
@@ -142,7 +159,7 @@ mkidir --list-templates
 1. **Isolated Sandbox**: Creates the sandbox as a hidden sibling of the target so the final rename stays on the same filesystem
 2. **Direnv Generation**: Creates `.envrc` file for automatic environment activation
 3. **Package Installation**: Installs specified packages via devbox
-4. **Template Scaffolding**: Optionally writes starter files such as `README.md`, `package.json`, or `pyproject.toml`
+4. **Template Scaffolding**: Optionally writes starter files from the built-in template assets
 5. **Git Setup**: If `git` is in package list, runs `git init` and updates `.gitignore`
 6. **Atomic Commit**: Renames the completed sandbox into place (rolls back on failure)
 
@@ -160,6 +177,20 @@ When you `cd` into the created directory, direnv automatically activates the dev
 - **Atomic Creation**: The final rename happens on the destination filesystem, so you do not get a half-written target directory
 - **AI-Friendly**: Create the environment once, then AI can safely run npm/pip/etc commands
 - **Instant Activation**: With direnv, just `cd` into the project and everything works
+
+## Development
+
+The repository is split by concern:
+
+- `src/`: shell modules for CLI, parsing, workflow, and template orchestration
+- `templates/`: scaffold assets for each template
+- `scripts/build.sh`: generates the standalone `mkidir` file
+
+Run this after changing `src/` or `templates/`:
+
+```bash
+bash scripts/build.sh
+```
 
 ## License
 
