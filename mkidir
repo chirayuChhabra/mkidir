@@ -168,6 +168,37 @@ LOG_LEVEL=info
 
 MKIDIR_ASSET_EOF
             ;;
+        'express-js/package.json.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+{
+  "name": "__PROJECT_SLUG__",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Express API scaffold bootstrapped with mkidir",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "compression": "^1.7.4",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.2",
+    "helmet": "^8.0.0",
+    "http-errors": "^2.0.0",
+    "pino": "^9.5.0",
+    "pino-http": "^10.3.0",
+    "pino-pretty": "^13.0.0",
+    "zod": "^3.24.1"
+  }
+}
+
+MKIDIR_ASSET_EOF
+            ;;
         'express-js/README.md.tpl')
             cat <<'MKIDIR_ASSET_EOF'
 # __PROJECT_TITLE__
@@ -198,37 +229,6 @@ src/
   modules/
   routes/
 ```
-
-MKIDIR_ASSET_EOF
-            ;;
-        'express-js/package.json.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-{
-  "name": "__PROJECT_SLUG__",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Express API scaffold bootstrapped with mkidir",
-  "type": "module",
-  "engines": {
-    "node": ">=20"
-  },
-  "scripts": {
-    "dev": "node --watch src/server.js",
-    "start": "node src/server.js"
-  },
-  "dependencies": {
-    "compression": "^1.7.4",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.21.2",
-    "helmet": "^8.0.0",
-    "http-errors": "^2.0.0",
-    "pino": "^9.5.0",
-    "pino-http": "^10.3.0",
-    "pino-pretty": "^13.0.0",
-    "zod": "^3.24.1"
-  }
-}
 
 MKIDIR_ASSET_EOF
             ;;
@@ -439,47 +439,6 @@ LOG_LEVEL=info
 
 MKIDIR_ASSET_EOF
             ;;
-        'express-ts/README.md.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-# __PROJECT_TITLE__
-
-Production-ready Express API scaffold bootstrapped with mkidir.
-
-## Quick start
-
-```bash
-npm install
-cp .env.example .env
-npm run dev
-```
-
-## Scripts
-
-- `npm run dev`: start the API in watch mode with `tsx`
-- `npm run build`: compile TypeScript into `dist/`
-- `npm run start`: run the compiled server
-- `npm run typecheck`: validate the TypeScript project
-
-## Structure
-
-```text
-src/
-  app.ts
-  server.ts
-  config/
-  middleware/
-  modules/
-  routes/
-```
-
-## First modules
-
-- `src/modules/health`: example controller, route, and service
-- `src/config`: environment and logger setup
-- `src/middleware`: shared HTTP middleware
-
-MKIDIR_ASSET_EOF
-            ;;
         'express-ts/package.json.tpl')
             cat <<'MKIDIR_ASSET_EOF'
 {
@@ -518,6 +477,47 @@ MKIDIR_ASSET_EOF
     "typescript": "^5.7.2"
   }
 }
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/README.md.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+# __PROJECT_TITLE__
+
+Production-ready Express API scaffold bootstrapped with mkidir.
+
+## Quick start
+
+```bash
+npm install
+cp .env.example .env
+npm run dev
+```
+
+## Scripts
+
+- `npm run dev`: start the API in watch mode with `tsx`
+- `npm run build`: compile TypeScript into `dist/`
+- `npm run start`: run the compiled server
+- `npm run typecheck`: validate the TypeScript project
+
+## Structure
+
+```text
+src/
+  app.ts
+  server.ts
+  config/
+  middleware/
+  modules/
+  routes/
+```
+
+## First modules
+
+- `src/modules/health`: example controller, route, and service
+- `src/config`: environment and logger setup
+- `src/middleware`: shared HTTP middleware
 
 MKIDIR_ASSET_EOF
             ;;
@@ -751,19 +751,6 @@ MKIDIR_ASSET_EOF
 
 MKIDIR_ASSET_EOF
             ;;
-        'fullstack/README.md.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-# __PROJECT_TITLE__
-
-Full-stack starter bootstrapped with mkidir.
-
-## Apps
-
-- `apps/web`: Node.js frontend shell
-- `apps/api`: Python backend shell
-
-MKIDIR_ASSET_EOF
-            ;;
         'fullstack/apps/api/main.py.tpl')
             cat <<'MKIDIR_ASSET_EOF'
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -804,11 +791,16 @@ console.log("mkidir fullstack web app ready");
 
 MKIDIR_ASSET_EOF
             ;;
-        'node/README.md.tpl')
+        'fullstack/README.md.tpl')
             cat <<'MKIDIR_ASSET_EOF'
 # __PROJECT_TITLE__
 
-Node.js starter bootstrapped with mkidir.
+Full-stack starter bootstrapped with mkidir.
+
+## Apps
+
+- `apps/web`: Node.js frontend shell
+- `apps/api`: Python backend shell
 
 MKIDIR_ASSET_EOF
             ;;
@@ -826,17 +818,17 @@ MKIDIR_ASSET_EOF
 
 MKIDIR_ASSET_EOF
             ;;
-        'node/src/index.js.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-console.log("mkidir node template ready");
-
-MKIDIR_ASSET_EOF
-            ;;
-        'python/README.md.tpl')
+        'node/README.md.tpl')
             cat <<'MKIDIR_ASSET_EOF'
 # __PROJECT_TITLE__
 
-Python starter bootstrapped with mkidir.
+Node.js starter bootstrapped with mkidir.
+
+MKIDIR_ASSET_EOF
+            ;;
+        'node/src/index.js.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+console.log("mkidir node template ready");
 
 MKIDIR_ASSET_EOF
             ;;
@@ -852,6 +844,14 @@ version = "0.1.0"
 description = "Python starter bootstrapped with mkidir"
 readme = "README.md"
 requires-python = ">=3.12"
+
+MKIDIR_ASSET_EOF
+            ;;
+        'python/README.md.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+# __PROJECT_TITLE__
+
+Python starter bootstrapped with mkidir.
 
 MKIDIR_ASSET_EOF
             ;;
