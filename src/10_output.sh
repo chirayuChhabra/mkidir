@@ -1,12 +1,13 @@
 show_usage() {
     cat <<'EOF'
-Usage: mkidir <target_path> [packages...] [--template NAME] [--js|--ts] [--dry-run]
+Usage: mkidir <target_path> [packages...] [--template NAME] [--npm|--pnpm|--bun] [--prisma] [--init] [--dry-run]
        mkidir --list-templates
 
 Options:
   --template, -t     Apply a starter template before finalizing the environment
-  --js               Use JavaScript when the template supports it
-  --ts               Use TypeScript when the template supports it
+  --npm, --pnpm, --bun  Choose package manager (default depends on template)
+  --prisma           Include Prisma configuration for express template
+  --init             Forces mkidir environment without template
   --dry-run          Print what would be created without touching the filesystem
   --list-templates   Show available built-in templates
   --help, -h         Show this help message
@@ -19,7 +20,7 @@ Available templates:
   node       Node.js app starter with package.json, README, and src/index.js
   python     Python app starter with pyproject.toml, README, and src/main.py
   fullstack  Polyglot starter with apps/web and apps/api skeletons
-  express    Express API starter with TypeScript by default and --js support
+  express    Express API starter with TypeScript
 EOF
 }
 

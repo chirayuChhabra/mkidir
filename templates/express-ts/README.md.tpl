@@ -1,36 +1,40 @@
 # __PROJECT_TITLE__
 
-Production-ready Express API scaffold bootstrapped with mkidir.
+Express TypeScript API project.
 
-## Quick start
+## Requirements
+- Node.js 22+ (or Bun)
+- Docker (optional)
 
-```bash
-npm install
-cp .env.example .env
-npm run dev
-```
+## Setup
 
-## Scripts
+1. Copy `.env.development.local` to `.env` if not already loaded automatically.
+   ```bash
+   cp .env.development.local .env
+   ```
 
-- `npm run dev`: start the API in watch mode with `tsx`
-- `npm run build`: compile TypeScript into `dist/`
-- `npm run start`: run the compiled server
-- `npm run typecheck`: validate the TypeScript project
+2. Install dependencies:
+   ```bash
+   __PACKAGE_MANAGER__ install
+   ```
 
-## Structure
+3. Run the development server:
+   ```bash
+   __RUN_CMD__ dev
+   ```
 
-```text
-src/
-  app.ts
-  server.ts
-  config/
-  middleware/
-  modules/
-  routes/
-```
+4. Build for production:
+   ```bash
+   __RUN_CMD__ build
+   ```
 
-## First modules
-
-- `src/modules/health`: example controller, route, and service
-- `src/config`: environment and logger setup
-- `src/middleware`: shared HTTP middleware
+## Folder Structure
+- `src/api`: Route controllers and handlers
+- `src/config`: Application configuration and environment variables
+- `src/database`: Database connection and setup (e.g. Prisma)
+- `src/errors`: Custom error types and handler definitions
+- `src/lib`: External library wrappers
+- `src/middleware`: Express middlewares
+- `src/queues`: Background jobs and workers
+- `src/types`: TypeScript typings
+- `src/utils`: Reusable helper functions

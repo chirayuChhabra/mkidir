@@ -59,6 +59,24 @@ setup_git() {
     log_info "Initializing git..."
     run_step "devbox run -- git init" devbox run -- git init
     append_gitignore_entries ".devbox/" ".direnv/"
+    
+    log_info "Creating initial commit..."
+    run_step "git add" devbox run -- git add .
+    devbox run -- git commit -m "chore: project initialization" >/dev/null 2>&1 || true
+}
+
+install_project_dependencies() {
+    if [[ ! -f "package.json" ]]; then
+        return
+    fi
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+        log_info "Dry run: would run project dependency installation using $PACKAGE_MANAGER"
+        return
+    fi
+
+    log_info "Installing project dependencies ($PACKAGE_MANAGER)..."
+    run_step "devbox run -- $PACKAGE_MANAGER install" devbox run -- "$PACKAGE_MANAGER" install
 }
 
 commit_environment() {
@@ -90,6 +108,21 @@ commit_environment() {
 }
 
 main() {
+    local is_mkidir_command=0
+
+    for arg in "$@"; do
+        case "$arg" in
+            --template*|-t|-express|--express|-bun|--bun|-npm|--npm|-pnpm|--pnpm|-prisma|--prisma|--list-templates|--help|-h|--dry-run|--init|-init)
+                is_mkidir_command=1
+                ;;
+        esac
+    done
+
+    # If there are no mkidir-specific flags, it's a pure mkdir command
+    if [[ $is_mkidir_command -eq 0 ]]; then
+        exec mkdir "$@"
+    fi
+
     parse_args "$@"
 
     if [[ $DRY_RUN -eq 0 ]]; then
@@ -101,6 +134,7 @@ main() {
     create_sandbox
     install_packages
     apply_template
+    install_project_dependencies
     setup_git
     commit_environment
 }

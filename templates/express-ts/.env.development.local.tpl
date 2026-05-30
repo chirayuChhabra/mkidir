@@ -1,0 +1,4 @@
+# Local Development Configuration
+PORT=3000
+NODE_ENV=development
+DATABASE_URL="postgresql://user:password@localhost:5432/mydb_dev?schema=public"

@@ -1,36 +1,30 @@
 {
   "name": "__PROJECT_SLUG__",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Express API scaffold bootstrapped with mkidir",
-  "type": "module",
-  "engines": {
-    "node": ">=20"
-  },
+  "version": "1.0.0",
+  "description": "__PROJECT_TITLE__ Express API",
+  "main": "src/server.ts",
   "scripts": {
-    "dev": "tsx watch --clear-screen=false src/server.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit"
+    "dev": "NODE_ENV=development __RUN_CMD__ --watch src/server.ts",
+    "start": "NODE_ENV=production __RUN_CMD__ src/server.ts",
+    "build": "tsc",
+    "lint": "biome check src",
+    "format": "biome format --write src"
   },
   "dependencies": {
-    "compression": "^1.7.4",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
+    __PRISMA_DEP__
+    __DOTENV_DEP__
     "express": "^4.21.2",
+    "cors": "^2.8.5",
     "helmet": "^8.0.0",
-    "http-errors": "^2.0.0",
-    "pino": "^9.5.0",
-    "pino-http": "^10.3.0",
-    "zod": "^3.24.1"
+    "zod": "^3.23.8"
   },
   "devDependencies": {
-    "@types/compression": "^1.7.5",
+    __PRISMA_DEV_DEP__
+    __BUN_TYPES_DEP__
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.21",
     "@types/node": "^22.10.2",
-    "pino-pretty": "^13.0.0",
-    "tsx": "^4.19.2",
+    "@biomejs/biome": "^1.9.4",
     "typescript": "^5.7.2"
   }
 }

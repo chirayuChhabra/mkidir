@@ -30,12 +30,28 @@ parse_args() {
                 TEMPLATE="${1#*=}"
                 shift
                 ;;
-            --js)
-                TEMPLATE_LANGUAGE="js"
+            --express|-express)
+                TEMPLATE="express"
                 shift
                 ;;
-            --ts)
-                TEMPLATE_LANGUAGE="ts"
+            --bun|-bun)
+                PACKAGE_MANAGER="bun"
+                shift
+                ;;
+            --npm|-npm)
+                PACKAGE_MANAGER="npm"
+                shift
+                ;;
+            --pnpm|-pnpm)
+                PACKAGE_MANAGER="pnpm"
+                shift
+                ;;
+            --prisma|-prisma)
+                PRISMA=1
+                shift
+                ;;
+            --init|-init)
+                # Just forces mkidir environment without template
                 shift
                 ;;
             -*)

@@ -87,6 +87,43 @@ write_asset_file() {
     content="$(render_asset "$asset_key")"
     content="${content//__PROJECT_TITLE__/$PROJECT_TITLE}"
     content="${content//__PROJECT_SLUG__/$PROJECT_SLUG}"
+    content="${content//__PACKAGE_MANAGER__/$PACKAGE_MANAGER}"
+    
+    local run_cmd
+    if [[ "$PACKAGE_MANAGER" == "bun" ]]; then
+        run_cmd="bun"
+    elif [[ "$PACKAGE_MANAGER" == "npm" ]]; then
+        run_cmd="npm run"
+    else
+        run_cmd="pnpm"
+    fi
+    content="${content//__RUN_CMD__/$run_cmd}"
+    local prisma_dep=""
+    local prisma_dev_dep=""
+    if [[ $PRISMA -eq 1 ]]; then
+        prisma_dep='"@prisma/client": "^6.0.0",'
+        prisma_dev_dep='"prisma": "^6.0.0",'
+    fi
+    content="${content//__PRISMA_DEP__/$prisma_dep}"
+    content="${content//__PRISMA_DEV_DEP__/$prisma_dev_dep}"
+
+    local dotenv_dep=""
+    local dotenv_import=""
+    local env_processor="process.env"
+    local bun_types_dep=""
+    
+    if [[ "$PACKAGE_MANAGER" == "bun" ]]; then
+        env_processor="Bun.env"
+        bun_types_dep='"@types/bun": "^1.1.14",'
+    else
+        dotenv_dep='"dotenv": "^16.4.7",'
+        dotenv_import='import "dotenv/config";'
+    fi
+    content="${content//__DOTENV_DEP__/$dotenv_dep}"
+    content="${content//__DOTENV_IMPORT__/$dotenv_import}"
+    content="${content//__ENV_PROCESSOR__/$env_processor}"
+    content="${content//__BUN_TYPES_DEP__/$bun_types_dep}"
+
     mkdir -p "$(dirname "$destination")"
     printf '%s\n' "$content" >"$destination"
 }

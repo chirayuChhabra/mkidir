@@ -15,16 +15,19 @@ TEMPLATE_LANGUAGE=""
 PROJECT_TITLE=""
 PROJECT_SLUG=""
 PACKAGES=()
+PACKAGE_MANAGER="pnpm"
+PRISMA=0
 
 show_usage() {
     cat <<'EOF'
-Usage: mkidir <target_path> [packages...] [--template NAME] [--js|--ts] [--dry-run]
+Usage: mkidir <target_path> [packages...] [--template NAME] [--npm|--pnpm|--bun] [--prisma] [--init] [--dry-run]
        mkidir --list-templates
 
 Options:
   --template, -t     Apply a starter template before finalizing the environment
-  --js               Use JavaScript when the template supports it
-  --ts               Use TypeScript when the template supports it
+  --npm, --pnpm, --bun  Choose package manager (default depends on template)
+  --prisma           Include Prisma configuration for express template
+  --init             Forces mkidir environment without template
   --dry-run          Print what would be created without touching the filesystem
   --list-templates   Show available built-in templates
   --help, -h         Show this help message
@@ -37,7 +40,7 @@ Available templates:
   node       Node.js app starter with package.json, README, and src/index.js
   python     Python app starter with pyproject.toml, README, and src/main.py
   fullstack  Polyglot starter with apps/web and apps/api skeletons
-  express    Express API starter with TypeScript by default and --js support
+  express    Express API starter with TypeScript
 EOF
 }
 
@@ -138,6 +141,43 @@ write_asset_file() {
     content="$(render_asset "$asset_key")"
     content="${content//__PROJECT_TITLE__/$PROJECT_TITLE}"
     content="${content//__PROJECT_SLUG__/$PROJECT_SLUG}"
+    content="${content//__PACKAGE_MANAGER__/$PACKAGE_MANAGER}"
+    
+    local run_cmd
+    if [[ "$PACKAGE_MANAGER" == "bun" ]]; then
+        run_cmd="bun"
+    elif [[ "$PACKAGE_MANAGER" == "npm" ]]; then
+        run_cmd="npm run"
+    else
+        run_cmd="pnpm"
+    fi
+    content="${content//__RUN_CMD__/$run_cmd}"
+    local prisma_dep=""
+    local prisma_dev_dep=""
+    if [[ $PRISMA -eq 1 ]]; then
+        prisma_dep='"@prisma/client": "^6.0.0",'
+        prisma_dev_dep='"prisma": "^6.0.0",'
+    fi
+    content="${content//__PRISMA_DEP__/$prisma_dep}"
+    content="${content//__PRISMA_DEV_DEP__/$prisma_dev_dep}"
+
+    local dotenv_dep=""
+    local dotenv_import=""
+    local env_processor="process.env"
+    local bun_types_dep=""
+    
+    if [[ "$PACKAGE_MANAGER" == "bun" ]]; then
+        env_processor="Bun.env"
+        bun_types_dep='"@types/bun": "^1.1.14",'
+    else
+        dotenv_dep='"dotenv": "^16.4.7",'
+        dotenv_import='import "dotenv/config";'
+    fi
+    content="${content//__DOTENV_DEP__/$dotenv_dep}"
+    content="${content//__DOTENV_IMPORT__/$dotenv_import}"
+    content="${content//__ENV_PROCESSOR__/$env_processor}"
+    content="${content//__BUN_TYPES_DEP__/$bun_types_dep}"
+
     mkdir -p "$(dirname "$destination")"
     printf '%s\n' "$content" >"$destination"
 }
@@ -160,274 +200,12 @@ trap 'exit 143' TERM
 
 render_asset() {
     case "$1" in
-        'express-js/.env.example.tpl')
+        'express-ts/.env.development.local.tpl')
             cat <<'MKIDIR_ASSET_EOF'
-NODE_ENV=development
+# Local Development Configuration
 PORT=3000
-LOG_LEVEL=info
-
-MKIDIR_ASSET_EOF
-            ;;
-        'express-js/package.json.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-{
-  "name": "__PROJECT_SLUG__",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Express API scaffold bootstrapped with mkidir",
-  "type": "module",
-  "engines": {
-    "node": ">=20"
-  },
-  "scripts": {
-    "dev": "node --watch src/server.js",
-    "start": "node src/server.js"
-  },
-  "dependencies": {
-    "compression": "^1.7.4",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.21.2",
-    "helmet": "^8.0.0",
-    "http-errors": "^2.0.0",
-    "pino": "^9.5.0",
-    "pino-http": "^10.3.0",
-    "pino-pretty": "^13.0.0",
-    "zod": "^3.24.1"
-  }
-}
-
-MKIDIR_ASSET_EOF
-            ;;
-        'express-js/README.md.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-# __PROJECT_TITLE__
-
-Production-ready Express API scaffold bootstrapped with mkidir.
-
-## Quick start
-
-```bash
-npm install
-cp .env.example .env
-npm run dev
-```
-
-## Scripts
-
-- `npm run dev`: start the API in watch mode with native Node watch mode
-- `npm run start`: run the API once
-
-## Structure
-
-```text
-src/
-  app.js
-  server.js
-  config/
-  middleware/
-  modules/
-  routes/
-```
-
-MKIDIR_ASSET_EOF
-            ;;
-        'express-js/src/app.js.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-import compression from "compression";
-import cors from "cors";
-import express from "express";
-import helmet from "helmet";
-
-import { httpLogger } from "./config/logger.js";
-import { errorHandler } from "./middleware/error-handler.js";
-import { notFoundHandler } from "./middleware/not-found.js";
-import { apiRouter } from "./routes/index.js";
-
-export function createApp() {
-  const app = express();
-
-  app.disable("x-powered-by");
-  app.use(helmet());
-  app.use(cors());
-  app.use(compression());
-  app.use(express.json());
-  app.use(httpLogger);
-
-  app.get("/", (_req, res) => {
-    res.status(200).json({
-      service: "__PROJECT_SLUG__",
-      status: "ok"
-    });
-  });
-
-  app.use("/api", apiRouter);
-  app.use(notFoundHandler);
-  app.use(errorHandler);
-
-  return app;
-}
-
-MKIDIR_ASSET_EOF
-            ;;
-        'express-js/src/config/env.js.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-import "dotenv/config";
-
-import { z } from "zod";
-
-const envSchema = z.object({
-  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-  LOG_LEVEL: z
-    .enum(["fatal", "error", "warn", "info", "debug", "trace"])
-    .default("info")
-});
-
-export const env = envSchema.parse(process.env);
-
-MKIDIR_ASSET_EOF
-            ;;
-        'express-js/src/config/logger.js.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-import pino from "pino";
-import pinoHttp from "pino-http";
-
-import { env } from "./env.js";
-
-const transport =
-  env.NODE_ENV === "development"
-    ? {
-        target: "pino-pretty",
-        options: {
-          colorize: true,
-          translateTime: "SYS:standard"
-        }
-      }
-    : undefined;
-
-export const logger = pino({
-  level: env.LOG_LEVEL,
-  transport
-});
-
-export const httpLogger = pinoHttp({
-  logger
-});
-
-MKIDIR_ASSET_EOF
-            ;;
-        'express-js/src/middleware/error-handler.js.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-import { logger } from "../config/logger.js";
-
-export function errorHandler(error, _req, res, _next) {
-  const statusCode = typeof error.status === "number" ? Number(error.status) : 500;
-  const message = statusCode >= 500 ? "Internal server error" : error.message || "Request failed";
-
-  if (statusCode >= 500) {
-    logger.error({ err: error }, "Unhandled request error");
-  }
-
-  res.status(statusCode).json({
-    error: {
-      message
-    }
-  });
-}
-
-MKIDIR_ASSET_EOF
-            ;;
-        'express-js/src/middleware/not-found.js.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-import createHttpError from "http-errors";
-
-export function notFoundHandler(_req, _res, next) {
-  next(createHttpError(404, "Route not found"));
-}
-
-MKIDIR_ASSET_EOF
-            ;;
-        'express-js/src/modules/health/health.controller.js.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-import { getHealthSnapshot } from "./health.service.js";
-
-export function getHealth(_req, res) {
-  res.status(200).json({
-    data: getHealthSnapshot()
-  });
-}
-
-MKIDIR_ASSET_EOF
-            ;;
-        'express-js/src/modules/health/health.route.js.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-import { Router } from "express";
-
-import { getHealth } from "./health.controller.js";
-
-export const healthRouter = Router();
-
-healthRouter.get("/", getHealth);
-
-MKIDIR_ASSET_EOF
-            ;;
-        'express-js/src/modules/health/health.service.js.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-import { env } from "../../config/env.js";
-
-export function getHealthSnapshot() {
-  return {
-    status: "ok",
-    environment: env.NODE_ENV,
-    uptimeSeconds: Math.round(process.uptime()),
-    timestamp: new Date().toISOString()
-  };
-}
-
-MKIDIR_ASSET_EOF
-            ;;
-        'express-js/src/routes/index.js.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-import { Router } from "express";
-
-import { healthRouter } from "../modules/health/health.route.js";
-
-export const apiRouter = Router();
-
-apiRouter.use("/health", healthRouter);
-
-MKIDIR_ASSET_EOF
-            ;;
-        'express-js/src/server.js.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-import http from "node:http";
-
-import { createApp } from "./app.js";
-import { env } from "./config/env.js";
-import { logger } from "./config/logger.js";
-
-const app = createApp();
-const server = http.createServer(app);
-
-server.listen(env.PORT, () => {
-  logger.info({ port: env.PORT, env: env.NODE_ENV }, "Server listening");
-});
-
-function shutdown(signal) {
-  logger.info({ signal }, "Shutting down HTTP server");
-  server.close((error) => {
-    if (error) {
-      logger.error({ err: error }, "Server shutdown failed");
-      process.exit(1);
-    }
-
-    process.exit(0);
-  });
-}
-
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
+NODE_ENV=development
+DATABASE_URL="postgresql://user:password@localhost:5432/mydb_dev?schema=public"
 
 MKIDIR_ASSET_EOF
             ;;
@@ -439,44 +217,58 @@ LOG_LEVEL=info
 
 MKIDIR_ASSET_EOF
             ;;
-        'express-ts/package.json.tpl')
+        'express-ts/.env.production.local.tpl')
             cat <<'MKIDIR_ASSET_EOF'
-{
-  "name": "__PROJECT_SLUG__",
-  "version": "0.1.0",
-  "private": true,
-  "description": "Express API scaffold bootstrapped with mkidir",
-  "type": "module",
-  "engines": {
-    "node": ">=20"
-  },
-  "scripts": {
-    "dev": "tsx watch --clear-screen=false src/server.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit"
-  },
-  "dependencies": {
-    "compression": "^1.7.4",
-    "cors": "^2.8.5",
-    "dotenv": "^16.4.5",
-    "express": "^4.21.2",
-    "helmet": "^8.0.0",
-    "http-errors": "^2.0.0",
-    "pino": "^9.5.0",
-    "pino-http": "^10.3.0",
-    "zod": "^3.24.1"
-  },
-  "devDependencies": {
-    "@types/compression": "^1.7.5",
-    "@types/cors": "^2.8.17",
-    "@types/express": "^4.17.21",
-    "@types/node": "^22.10.2",
-    "pino-pretty": "^13.0.0",
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.2"
-  }
-}
+# Local Production-like Configuration
+PORT=8080
+NODE_ENV=production
+DATABASE_URL="postgresql://user:password@localhost:5432/mydb_prod?schema=public"
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/.env.template.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+# Application Configuration
+PORT=3000
+NODE_ENV=development
+
+# Database Configuration
+DATABASE_URL="postgresql://user:password@localhost:5432/mydb?schema=public"
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/.env.testing.local.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+# Local Testing Configuration
+PORT=4000
+NODE_ENV=test
+DATABASE_URL="postgresql://user:password@localhost:5432/mydb_test?schema=public"
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/Dockerfile.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+FROM node:22-alpine AS builder
+
+WORKDIR /app
+COPY package*.json pnpm-lock.yaml bun.lockb ./
+RUN npm install -g pnpm bun && \
+    if [ -f bun.lockb ]; then bun install --frozen-lockfile; \
+    elif [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile; \
+    else npm ci; fi
+
+COPY . .
+RUN npm run build
+
+FROM node:22-alpine AS runner
+
+WORKDIR /app
+COPY --from=builder /app/package*.json ./
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/node_modules ./node_modules
+
+EXPOSE 3000
+CMD ["node", "dist/server.js"]
 
 MKIDIR_ASSET_EOF
             ;;
@@ -484,249 +276,294 @@ MKIDIR_ASSET_EOF
             cat <<'MKIDIR_ASSET_EOF'
 # __PROJECT_TITLE__
 
-Production-ready Express API scaffold bootstrapped with mkidir.
+Express TypeScript API project.
 
-## Quick start
+## Requirements
+- Node.js 22+ (or Bun)
+- Docker (optional)
 
-```bash
-npm install
-cp .env.example .env
-npm run dev
-```
+## Setup
 
-## Scripts
+1. Copy `.env.development.local` to `.env` if not already loaded automatically.
+   ```bash
+   cp .env.development.local .env
+   ```
 
-- `npm run dev`: start the API in watch mode with `tsx`
-- `npm run build`: compile TypeScript into `dist/`
-- `npm run start`: run the compiled server
-- `npm run typecheck`: validate the TypeScript project
+2. Install dependencies:
+   ```bash
+   __PACKAGE_MANAGER__ install
+   ```
 
-## Structure
+3. Run the development server:
+   ```bash
+   __RUN_CMD__ dev
+   ```
 
-```text
-src/
-  app.ts
-  server.ts
-  config/
-  middleware/
-  modules/
-  routes/
-```
+4. Build for production:
+   ```bash
+   __RUN_CMD__ build
+   ```
 
-## First modules
+## Folder Structure
+- `src/api`: Route controllers and handlers
+- `src/config`: Application configuration and environment variables
+- `src/database`: Database connection and setup (e.g. Prisma)
+- `src/errors`: Custom error types and handler definitions
+- `src/lib`: External library wrappers
+- `src/middleware`: Express middlewares
+- `src/queues`: Background jobs and workers
+- `src/types`: TypeScript typings
+- `src/utils`: Reusable helper functions
 
-- `src/modules/health`: example controller, route, and service
-- `src/config`: environment and logger setup
-- `src/middleware`: shared HTTP middleware
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/biome.json.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+{
+  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "organizeImports": {
+    "enabled": true
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true
+    }
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  }
+}
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/package.json.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+{
+  "name": "__PROJECT_SLUG__",
+  "version": "1.0.0",
+  "description": "__PROJECT_TITLE__ Express API",
+  "main": "src/server.ts",
+  "scripts": {
+    "dev": "NODE_ENV=development __RUN_CMD__ --watch src/server.ts",
+    "start": "NODE_ENV=production __RUN_CMD__ src/server.ts",
+    "build": "tsc",
+    "lint": "biome check src",
+    "format": "biome format --write src"
+  },
+  "dependencies": {
+    __PRISMA_DEP__
+    __DOTENV_DEP__
+    "express": "^4.21.2",
+    "cors": "^2.8.5",
+    "helmet": "^8.0.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    __PRISMA_DEV_DEP__
+    __BUN_TYPES_DEP__
+    "@types/cors": "^2.8.17",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.2",
+    "@biomejs/biome": "^1.9.4",
+    "typescript": "^5.7.2"
+  }
+}
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/prisma.config.ts.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+// This file was generated by Prisma
+import { defineConfig } from "prisma/config";
+
+export default defineConfig({
+  schema: "prisma/models",
+  migrations: {
+    path: "prisma/migrations",
+  },
+  datasource: {
+    url: process.env.DATABASE_URL || "postgresql://localhost:5432/db",
+  },
+});
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/prisma/models/.gitkeep')
+            cat <<'MKIDIR_ASSET_EOF'
+# placeholder
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/prisma/schema.prisma.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/src/api/.gitkeep')
+            cat <<'MKIDIR_ASSET_EOF'
+# placeholder
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/src/api/v1/.gitkeep')
+            cat <<'MKIDIR_ASSET_EOF'
+# placeholder
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/src/api/v1/modules/.gitkeep')
+            cat <<'MKIDIR_ASSET_EOF'
+# placeholder
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/src/api/v2/.gitkeep')
+            cat <<'MKIDIR_ASSET_EOF'
+# placeholder
 
 MKIDIR_ASSET_EOF
             ;;
         'express-ts/src/app.ts.tpl')
             cat <<'MKIDIR_ASSET_EOF'
-import compression from "compression";
-import cors from "cors";
 import express from "express";
+import type { Request, Response, NextFunction } from "express";
+import cors from "cors";
 import helmet from "helmet";
 
-import { httpLogger } from "./config/logger.js";
-import { errorHandler } from "./middleware/error-handler.js";
-import { notFoundHandler } from "./middleware/not-found.js";
-import { apiRouter } from "./routes/index.js";
+const app = express();
 
-export function createApp() {
-  const app = express();
+app.use(helmet());
+app.use(cors());
+app.use(express.json());
 
-  app.disable("x-powered-by");
-  app.use(helmet());
-  app.use(cors());
-  app.use(compression());
-  app.use(express.json());
-  app.use(httpLogger);
+app.get("/health", (req: Request, res: Response) => {
+  res.status(200).json({ status: "ok" });
+});
 
-  app.get("/", (_req, res) => {
-    res.status(200).json({
-      service: "__PROJECT_SLUG__",
-      status: "ok"
-    });
-  });
+app.use((req: Request, res: Response, next: NextFunction) => {
+  res.status(404).json({ error: "Not Found" });
+});
 
-  app.use("/api", apiRouter);
-  app.use(notFoundHandler);
-  app.use(errorHandler);
+app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+  console.error(err);
+  res.status(500).json({ error: "Internal Server Error" });
+});
 
-  return app;
+export default app;
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/src/config/.gitkeep')
+            cat <<'MKIDIR_ASSET_EOF'
+# placeholder
+
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/src/config/config.envVar.ts.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+import z from "zod";
+import { envVarSchema } from "./config.schema";
+
+const result = envVarSchema.safeParse(__ENV_PROCESSOR__);
+
+if (!result.success) {
+  const errorMessage = result.error.errors.map((e) => `${e.path.join(".")}: ${e.message}`).join(", ");
+  throw new Error(`Invalid environment variables: ${errorMessage}`);
 }
 
-MKIDIR_ASSET_EOF
-            ;;
-        'express-ts/src/config/env.ts.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-import "dotenv/config";
-
-import { z } from "zod";
-
-const envSchema = z.object({
-  NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-  LOG_LEVEL: z
-    .enum(["fatal", "error", "warn", "info", "debug", "trace"])
-    .default("info")
-});
-
-export const env = envSchema.parse(process.env);
+export const envVar = result.data;
 
 MKIDIR_ASSET_EOF
             ;;
-        'express-ts/src/config/logger.ts.tpl')
+        'express-ts/src/config/config.schema.ts.tpl')
             cat <<'MKIDIR_ASSET_EOF'
-import pino from "pino";
-import pinoHttp from "pino-http";
+import z from "zod";
 
-import { env } from "./env.js";
-
-const transport =
-  env.NODE_ENV === "development"
-    ? {
-        target: "pino-pretty",
-        options: {
-          colorize: true,
-          translateTime: "SYS:standard"
-        }
-      }
-    : undefined;
-
-export const logger = pino({
-  level: env.LOG_LEVEL,
-  transport
-});
-
-export const httpLogger = pinoHttp({
-  logger
+export const envVarSchema = z.object({
+  DATABASE_URL: z.string().optional(),
+  NODE_ENV: z.enum(["production", "development", "test"]).default("development"),
+  PORT: z.coerce.number().default(3000),
 });
 
 MKIDIR_ASSET_EOF
             ;;
-        'express-ts/src/middleware/error-handler.ts.tpl')
+        'express-ts/src/database/.gitkeep')
             cat <<'MKIDIR_ASSET_EOF'
-import type { ErrorRequestHandler } from "express";
-
-import { logger } from "../config/logger.js";
-
-export const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
-  const statusCode =
-    typeof (error as { status?: unknown }).status === "number"
-      ? Number((error as { status: number }).status)
-      : 500;
-
-  const message =
-    statusCode >= 500 ? "Internal server error" : error.message || "Request failed";
-
-  if (statusCode >= 500) {
-    logger.error({ err: error }, "Unhandled request error");
-  }
-
-  res.status(statusCode).json({
-    error: {
-      message
-    }
-  });
-};
+# placeholder
 
 MKIDIR_ASSET_EOF
             ;;
-        'express-ts/src/middleware/not-found.ts.tpl')
+        'express-ts/src/errors/.gitkeep')
             cat <<'MKIDIR_ASSET_EOF'
-import type { RequestHandler } from "express";
-import createHttpError from "http-errors";
-
-export const notFoundHandler: RequestHandler = (_req, _res, next) => {
-  next(createHttpError(404, "Route not found"));
-};
+# placeholder
 
 MKIDIR_ASSET_EOF
             ;;
-        'express-ts/src/modules/health/health.controller.ts.tpl')
+        'express-ts/src/lib/.gitkeep')
             cat <<'MKIDIR_ASSET_EOF'
-import type { Request, Response } from "express";
-
-import { getHealthSnapshot } from "./health.service.js";
-
-export function getHealth(_req: Request, res: Response) {
-  res.status(200).json({
-    data: getHealthSnapshot()
-  });
-}
+# placeholder
 
 MKIDIR_ASSET_EOF
             ;;
-        'express-ts/src/modules/health/health.route.ts.tpl')
+        'express-ts/src/middleware/.gitkeep')
             cat <<'MKIDIR_ASSET_EOF'
-import { Router } from "express";
-
-import { getHealth } from "./health.controller.js";
-
-export const healthRouter = Router();
-
-healthRouter.get("/", getHealth);
+# placeholder
 
 MKIDIR_ASSET_EOF
             ;;
-        'express-ts/src/modules/health/health.service.ts.tpl')
+        'express-ts/src/queues/.gitkeep')
             cat <<'MKIDIR_ASSET_EOF'
-import { env } from "../../config/env.js";
-
-export function getHealthSnapshot() {
-  return {
-    status: "ok",
-    environment: env.NODE_ENV,
-    uptimeSeconds: Math.round(process.uptime()),
-    timestamp: new Date().toISOString()
-  };
-}
-
-MKIDIR_ASSET_EOF
-            ;;
-        'express-ts/src/routes/index.ts.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-import { Router } from "express";
-
-import { healthRouter } from "../modules/health/health.route.js";
-
-export const apiRouter = Router();
-
-apiRouter.use("/health", healthRouter);
+# placeholder
 
 MKIDIR_ASSET_EOF
             ;;
         'express-ts/src/server.ts.tpl')
             cat <<'MKIDIR_ASSET_EOF'
-import http from "node:http";
+__DOTENV_IMPORT__
+import app from "./app";
 
-import { createApp } from "./app.js";
-import { env } from "./config/env.js";
-import { logger } from "./config/logger.js";
+const PORT = process.env.PORT || 3000;
 
-const app = createApp();
-const server = http.createServer(app);
-
-server.listen(env.PORT, () => {
-  logger.info({ port: env.PORT, env: env.NODE_ENV }, "Server listening");
+app.listen(PORT, () => {
+  console.log(`__PROJECT_TITLE__ server is running on port ${PORT}`);
 });
 
-function shutdown(signal: string) {
-  logger.info({ signal }, "Shutting down HTTP server");
-  server.close((error) => {
-    if (error) {
-      logger.error({ err: error }, "Server shutdown failed");
-      process.exit(1);
-    }
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/src/types/express.d.ts.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+// extending request
 
-    process.exit(0);
-  });
+import "express";
+
+declare global {
+  namespace Express {
+    interface Request {
+      validatedData?: {
+        body?: unknown;
+        query?: unknown;
+        params?: unknown;
+      };
+    }
+  }
 }
 
-process.on("SIGINT", () => shutdown("SIGINT"));
-process.on("SIGTERM", () => shutdown("SIGTERM"));
+MKIDIR_ASSET_EOF
+            ;;
+        'express-ts/src/utils/.gitkeep')
+            cat <<'MKIDIR_ASSET_EOF'
+# placeholder
 
 MKIDIR_ASSET_EOF
             ;;
@@ -735,19 +572,32 @@ MKIDIR_ASSET_EOF
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "rootDir": "src",
-    "outDir": "dist",
+    "module": "CommonJS",
+    "moduleResolution": "node",
     "strict": true,
     "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true
+    "forceConsistentCasingInFileNames": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "resolveJsonModule": true
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "**/*.spec.ts"]
 }
+
+MKIDIR_ASSET_EOF
+            ;;
+        'fullstack/README.md.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+# __PROJECT_TITLE__
+
+Full-stack starter bootstrapped with mkidir.
+
+## Apps
+
+- `apps/web`: Node.js frontend shell
+- `apps/api`: Python backend shell
 
 MKIDIR_ASSET_EOF
             ;;
@@ -791,16 +641,11 @@ console.log("mkidir fullstack web app ready");
 
 MKIDIR_ASSET_EOF
             ;;
-        'fullstack/README.md.tpl')
+        'node/README.md.tpl')
             cat <<'MKIDIR_ASSET_EOF'
 # __PROJECT_TITLE__
 
-Full-stack starter bootstrapped with mkidir.
-
-## Apps
-
-- `apps/web`: Node.js frontend shell
-- `apps/api`: Python backend shell
+Node.js starter bootstrapped with mkidir.
 
 MKIDIR_ASSET_EOF
             ;;
@@ -818,17 +663,17 @@ MKIDIR_ASSET_EOF
 
 MKIDIR_ASSET_EOF
             ;;
-        'node/README.md.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-# __PROJECT_TITLE__
-
-Node.js starter bootstrapped with mkidir.
-
-MKIDIR_ASSET_EOF
-            ;;
         'node/src/index.js.tpl')
             cat <<'MKIDIR_ASSET_EOF'
 console.log("mkidir node template ready");
+
+MKIDIR_ASSET_EOF
+            ;;
+        'python/README.md.tpl')
+            cat <<'MKIDIR_ASSET_EOF'
+# __PROJECT_TITLE__
+
+Python starter bootstrapped with mkidir.
 
 MKIDIR_ASSET_EOF
             ;;
@@ -844,14 +689,6 @@ version = "0.1.0"
 description = "Python starter bootstrapped with mkidir"
 readme = "README.md"
 requires-python = ">=3.12"
-
-MKIDIR_ASSET_EOF
-            ;;
-        'python/README.md.tpl')
-            cat <<'MKIDIR_ASSET_EOF'
-# __PROJECT_TITLE__
-
-Python starter bootstrapped with mkidir.
 
 MKIDIR_ASSET_EOF
             ;;
@@ -876,11 +713,7 @@ MKIDIR_ASSET_EOF
 template_variant_name() {
     case "$TEMPLATE" in
         express)
-            if [[ "$TEMPLATE_LANGUAGE" == "js" ]]; then
-                printf 'express (javascript)\n'
-            else
-                printf 'express (typescript)\n'
-            fi
+            printf 'express\n'
             ;;
         *)
             printf '%s\n' "$TEMPLATE"
@@ -898,18 +731,6 @@ validate_template() {
             exit 1
             ;;
     esac
-
-    if [[ "$TEMPLATE" == "express" ]]; then
-        if [[ -z "$TEMPLATE_LANGUAGE" ]]; then
-            TEMPLATE_LANGUAGE="ts"
-        fi
-        return
-    fi
-
-    if [[ -n "$TEMPLATE_LANGUAGE" ]]; then
-        log_error "--js/--ts is only supported with the express template"
-        exit 1
-    fi
 }
 
 merge_template_packages() {
@@ -928,7 +749,14 @@ merge_template_packages() {
             add_package "git"
             ;;
         express)
-            add_package "nodejs@24"
+            if [[ "$PACKAGE_MANAGER" == "bun" ]]; then
+                add_package "bun"
+            elif [[ "$PACKAGE_MANAGER" == "npm" ]]; then
+                add_package "nodejs@24"
+            else
+                add_package "nodejs@24"
+                add_package "pnpm"
+            fi
             add_package "git"
             ;;
     esac
@@ -953,25 +781,26 @@ print_template_plan() {
             echo "   - apps/api/main.py"
             ;;
         express)
-            if [[ "$TEMPLATE_LANGUAGE" == "js" ]]; then
-                echo "   - README.md"
-                echo "   - package.json"
-                echo "   - .env.example"
-                echo "   - src/app.js"
-                echo "   - src/server.js"
-                echo "   - src/config/"
-                echo "   - src/modules/health/"
-                echo "   - src/routes/index.js"
-            else
-                echo "   - README.md"
-                echo "   - package.json"
-                echo "   - tsconfig.json"
-                echo "   - .env.example"
-                echo "   - src/app.ts"
-                echo "   - src/server.ts"
-                echo "   - src/config/"
-                echo "   - src/modules/health/"
-                echo "   - src/routes/index.ts"
+            echo "   - README.md"
+            echo "   - package.json"
+            echo "   - tsconfig.json"
+            echo "   - biome.json"
+            echo "   - Dockerfile"
+            echo "   - .env.template"
+            echo "   - src/app.ts"
+            echo "   - src/server.ts"
+            echo "   - src/api/"
+            echo "   - src/config/"
+            echo "   - src/database/"
+            echo "   - src/errors/"
+            echo "   - src/lib/"
+            echo "   - src/middleware/"
+            echo "   - src/queues/"
+            echo "   - src/types/"
+            echo "   - src/utils/"
+            if [[ $PRISMA -eq 1 ]]; then
+                echo "   - prisma.config.ts"
+                echo "   - prisma/"
             fi
             ;;
     esac
@@ -1000,27 +829,45 @@ apply_fullstack_template() {
 }
 
 apply_express_template() {
-    local prefix
+    local prefix="express-ts"
 
-    prefix="express-$TEMPLATE_LANGUAGE"
     write_asset_file "$prefix/README.md.tpl" "README.md"
     write_asset_file "$prefix/package.json.tpl" "package.json"
-    write_asset_file "$prefix/.env.example.tpl" ".env.example"
-    write_asset_file "$prefix/src/app.$TEMPLATE_LANGUAGE.tpl" "src/app.$TEMPLATE_LANGUAGE"
-    write_asset_file "$prefix/src/server.$TEMPLATE_LANGUAGE.tpl" "src/server.$TEMPLATE_LANGUAGE"
-    write_asset_file "$prefix/src/config/env.$TEMPLATE_LANGUAGE.tpl" "src/config/env.$TEMPLATE_LANGUAGE"
-    write_asset_file "$prefix/src/config/logger.$TEMPLATE_LANGUAGE.tpl" "src/config/logger.$TEMPLATE_LANGUAGE"
-    write_asset_file "$prefix/src/middleware/error-handler.$TEMPLATE_LANGUAGE.tpl" "src/middleware/error-handler.$TEMPLATE_LANGUAGE"
-    write_asset_file "$prefix/src/middleware/not-found.$TEMPLATE_LANGUAGE.tpl" "src/middleware/not-found.$TEMPLATE_LANGUAGE"
-    write_asset_file "$prefix/src/routes/index.$TEMPLATE_LANGUAGE.tpl" "src/routes/index.$TEMPLATE_LANGUAGE"
-    write_asset_file "$prefix/src/modules/health/health.controller.$TEMPLATE_LANGUAGE.tpl" "src/modules/health/health.controller.$TEMPLATE_LANGUAGE"
-    write_asset_file "$prefix/src/modules/health/health.route.$TEMPLATE_LANGUAGE.tpl" "src/modules/health/health.route.$TEMPLATE_LANGUAGE"
-    write_asset_file "$prefix/src/modules/health/health.service.$TEMPLATE_LANGUAGE.tpl" "src/modules/health/health.service.$TEMPLATE_LANGUAGE"
-    append_gitignore_entries "node_modules/" "dist/" ".env"
+    write_asset_file "$prefix/tsconfig.json.tpl" "tsconfig.json"
+    write_asset_file "$prefix/biome.json.tpl" "biome.json"
+    write_asset_file "$prefix/Dockerfile.tpl" "Dockerfile"
+    write_asset_file "$prefix/.env.template.tpl" ".env.template"
+    write_asset_file "$prefix/.env.development.local.tpl" ".env.development.local"
+    write_asset_file "$prefix/.env.production.local.tpl" ".env.production.local"
+    write_asset_file "$prefix/.env.testing.local.tpl" ".env.testing.local"
 
-    if [[ "$TEMPLATE_LANGUAGE" == "ts" ]]; then
-        write_asset_file "$prefix/tsconfig.json.tpl" "tsconfig.json"
+    write_asset_file "$prefix/src/app.ts.tpl" "src/app.ts"
+    write_asset_file "$prefix/src/server.ts.tpl" "src/server.ts"
+
+    # We ensure directories exist by writing at least a .gitkeep or index file if needed,
+    # or the bash template engine will create directories when files are written.
+    write_asset_file "$prefix/src/api/v1/.gitkeep" "src/api/v1/.gitkeep"
+    write_asset_file "$prefix/src/api/v2/.gitkeep" "src/api/v2/.gitkeep"
+    write_asset_file "$prefix/src/api/v1/modules/.gitkeep" "src/api/v1/modules/.gitkeep"
+    
+    write_asset_file "$prefix/src/config/config.schema.ts.tpl" "src/config/config.schema.ts"
+    write_asset_file "$prefix/src/config/config.envVar.ts.tpl" "src/config/config.envVar.ts"
+    write_asset_file "$prefix/src/config/.gitkeep" "src/config/.gitkeep"
+    write_asset_file "$prefix/src/database/.gitkeep" "src/database/.gitkeep"
+    write_asset_file "$prefix/src/errors/.gitkeep" "src/errors/.gitkeep"
+    write_asset_file "$prefix/src/lib/.gitkeep" "src/lib/.gitkeep"
+    write_asset_file "$prefix/src/middleware/.gitkeep" "src/middleware/.gitkeep"
+    write_asset_file "$prefix/src/queues/.gitkeep" "src/queues/.gitkeep"
+    write_asset_file "$prefix/src/types/express.d.ts.tpl" "src/types/express.d.ts"
+    write_asset_file "$prefix/src/utils/.gitkeep" "src/utils/.gitkeep"
+
+    if [[ $PRISMA -eq 1 ]]; then
+        write_asset_file "$prefix/prisma.config.ts.tpl" "prisma.config.ts"
+        write_asset_file "$prefix/prisma/schema.prisma.tpl" "prisma/schema.prisma"
+        write_asset_file "$prefix/prisma/models/.gitkeep" "prisma/models/.gitkeep"
     fi
+
+    append_gitignore_entries "node_modules/" "dist/" ".env.*.local"
 }
 
 apply_template() {
@@ -1087,12 +934,28 @@ parse_args() {
                 TEMPLATE="${1#*=}"
                 shift
                 ;;
-            --js)
-                TEMPLATE_LANGUAGE="js"
+            --express|-express)
+                TEMPLATE="express"
                 shift
                 ;;
-            --ts)
-                TEMPLATE_LANGUAGE="ts"
+            --bun|-bun)
+                PACKAGE_MANAGER="bun"
+                shift
+                ;;
+            --npm|-npm)
+                PACKAGE_MANAGER="npm"
+                shift
+                ;;
+            --pnpm|-pnpm)
+                PACKAGE_MANAGER="pnpm"
+                shift
+                ;;
+            --prisma|-prisma)
+                PRISMA=1
+                shift
+                ;;
+            --init|-init)
+                # Just forces mkidir environment without template
                 shift
                 ;;
             -*)
@@ -1187,6 +1050,24 @@ setup_git() {
     log_info "Initializing git..."
     run_step "devbox run -- git init" devbox run -- git init
     append_gitignore_entries ".devbox/" ".direnv/"
+    
+    log_info "Creating initial commit..."
+    run_step "git add" devbox run -- git add .
+    devbox run -- git commit -m "chore: project initialization" >/dev/null 2>&1 || true
+}
+
+install_project_dependencies() {
+    if [[ ! -f "package.json" ]]; then
+        return
+    fi
+
+    if [[ $DRY_RUN -eq 1 ]]; then
+        log_info "Dry run: would run project dependency installation using $PACKAGE_MANAGER"
+        return
+    fi
+
+    log_info "Installing project dependencies ($PACKAGE_MANAGER)..."
+    run_step "devbox run -- $PACKAGE_MANAGER install" devbox run -- "$PACKAGE_MANAGER" install
 }
 
 commit_environment() {
@@ -1218,6 +1099,21 @@ commit_environment() {
 }
 
 main() {
+    local is_mkidir_command=0
+
+    for arg in "$@"; do
+        case "$arg" in
+            --template*|-t|-express|--express|-bun|--bun|-npm|--npm|-pnpm|--pnpm|-prisma|--prisma|--list-templates|--help|-h|--dry-run|--init|-init)
+                is_mkidir_command=1
+                ;;
+        esac
+    done
+
+    # If there are no mkidir-specific flags, it's a pure mkdir command
+    if [[ $is_mkidir_command -eq 0 ]]; then
+        exec mkdir "$@"
+    fi
+
     parse_args "$@"
 
     if [[ $DRY_RUN -eq 0 ]]; then
@@ -1229,6 +1125,7 @@ main() {
     create_sandbox
     install_packages
     apply_template
+    install_project_dependencies
     setup_git
     commit_environment
 }

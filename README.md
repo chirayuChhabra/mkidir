@@ -69,7 +69,7 @@ mkidir --help
 ## Usage
 
 ```bash
-mkidir <target_path> [packages...] [--template NAME] [--js|--ts] [--dry-run]
+mkidir <target_path> [packages...] [--template NAME] [--npm|--pnpm|--bun] [--prisma] [--init] [--dry-run]
 mkidir --list-templates
 ```
 
@@ -82,17 +82,17 @@ mkidir backend --template node
 cd backend
 ```
 
-Create an Express API in TypeScript:
+Create an Express API:
 
 ```bash
 mkidir api --template express
 cd api
 ```
 
-Create an Express API in JavaScript:
+Create an Express API using Bun and Prisma:
 
 ```bash
-mkidir api --template express --js
+mkidir api --template express --bun --prisma
 cd api
 ```
 
@@ -110,8 +110,7 @@ mkidir --list-templates
 
 ## Notes
 
-- `express` uses TypeScript by default
-- `--js` is currently supported only for the `express` template
+- `express` uses TypeScript
 - if `git` is part of the environment, `mkidir` initializes a repository and writes `.gitignore`
 
 ## For contributors
